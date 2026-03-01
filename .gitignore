@@ -1,0 +1,8 @@
+Data/
+jupyter/output/
+jupyter/output/lsh/
+*.parquet
+__pycache__/
+.venv/
+*.pyc
+README.md
