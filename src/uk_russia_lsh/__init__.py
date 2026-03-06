@@ -1,4 +1,4 @@
-﻿from .constants import (
+from .constants import (
     BASELINE_SIZE,
     CONFIG_GRID,
     DEFAULT_ARTIFACT_DIR,
@@ -8,6 +8,13 @@
     DEFAULT_VERIFY_THRESHOLD,
     LSHConfig,
     SCALE_SIZE,
+)
+from .datasets import (
+    build_combined_dataset,
+    default_combined_dataset_path,
+    default_telegram_export_path,
+    default_twitter_dataset_path,
+    export_telegram_dataset,
 )
 from .pipeline import (
     build_shingles_artifacts,
@@ -28,7 +35,12 @@ __all__ = [
     "DEFAULT_VERIFY_THRESHOLD",
     "LSHConfig",
     "SCALE_SIZE",
+    "build_combined_dataset",
     "build_shingles_artifacts",
+    "default_combined_dataset_path",
+    "default_telegram_export_path",
+    "default_twitter_dataset_path",
+    "export_telegram_dataset",
     "extract_subsets",
     "prepare_search_index",
     "run_baseline",

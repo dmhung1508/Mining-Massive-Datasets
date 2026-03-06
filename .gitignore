@@ -1,8 +1,16 @@
 Data/
+data/
 jupyter/output/
 jupyter/output/lsh/
 *.parquet
 __pycache__/
 .venv/
+.env
 *.pyc
-README.md
+media
+telegram_crawler/config.py
+telegram_crawler/cfg.py
+plan.csv
+.env.example
+.vscode
+datatele/telegram_messages.parquet
