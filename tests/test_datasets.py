@@ -40,6 +40,11 @@ def _write_telegram_jsonl(directory: Path) -> None:
             "timestamp": "2024-01-03T05:00:00+00:00",
             "forward_from": {"user_id": 77, "username": "origin_user"},
             "media": {"type": "photo"},
+            "war_classification": {
+                "label": "russia_ukraine_war",
+                "confidence": 0.91,
+                "reason": "mentions Russia and Ukraine war",
+            },
         },
         {
             "message_id": 12,
@@ -74,6 +79,8 @@ def test_export_telegram_dataset_from_jsonl(tmp_path: Path) -> None:
     assert result["text"].tolist() == ["Telegram update from a channel"]
     assert result["source_channel_id"].tolist() == ["12345"]
     assert result["media_type"].tolist() == ["photo"]
+    assert result["topic_label"].tolist() == ["russia_ukraine_war"]
+    assert result["topic_confidence"].round(2).tolist() == [0.91]
 
 
 def test_build_combined_dataset_merges_twitter_and_telegram(tmp_path: Path) -> None:

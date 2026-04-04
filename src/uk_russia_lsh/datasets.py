@@ -29,6 +29,9 @@ CANONICAL_COLUMNS = [
     "media_type",
     "forward_from_user_id",
     "forward_from_username",
+    "topic_label",
+    "topic_confidence",
+    "topic_reason",
 ]
 
 CANONICAL_ARROW_SCHEMA = pa.schema(
@@ -45,6 +48,9 @@ CANONICAL_ARROW_SCHEMA = pa.schema(
         pa.field("media_type", pa.string()),
         pa.field("forward_from_user_id", pa.string()),
         pa.field("forward_from_username", pa.string()),
+        pa.field("topic_label", pa.string()),
+        pa.field("topic_confidence", pa.float64()),
+        pa.field("topic_reason", pa.string()),
     ]
 )
 
@@ -56,6 +62,8 @@ STRING_METADATA_COLUMNS = [
     "media_type",
     "forward_from_user_id",
     "forward_from_username",
+    "topic_label",
+    "topic_reason",
 ]
 
 
@@ -206,6 +214,9 @@ def normalise_twitter_frame(frame: pd.DataFrame) -> pd.DataFrame:
     working["media_type"] = None
     working["forward_from_user_id"] = None
     working["forward_from_username"] = None
+    working["topic_label"] = None
+    working["topic_confidence"] = None
+    working["topic_reason"] = None
     return working[CANONICAL_COLUMNS].reset_index(drop=True)
 
 
@@ -213,6 +224,32 @@ def _nested_value(value: object, key: str) -> Any:
     if isinstance(value, dict):
         return value.get(key)
     return None
+
+
+def _topic_label_from_classification(value: object) -> str | None:
+    label = _nested_value(value, "label")
+    if label is None:
+        return None
+    label = str(label).strip().lower()
+    return label or None
+
+
+def _topic_confidence_from_classification(value: object) -> float | None:
+    confidence = _nested_value(value, "confidence")
+    if confidence is None:
+        return None
+    try:
+        return float(confidence)
+    except (TypeError, ValueError):
+        return None
+
+
+def _topic_reason_from_classification(value: object) -> str | None:
+    reason = _nested_value(value, "reason")
+    if reason is None:
+        return None
+    reason = str(reason).strip()
+    return reason or None
 
 
 def normalise_telegram_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -261,6 +298,10 @@ def normalise_telegram_frame(frame: pd.DataFrame) -> pd.DataFrame:
         "forward_from",
         pd.Series([None] * len(working)),
     ).map(lambda value: _nested_value(value, "username"))
+    classification = working.get("war_classification", pd.Series([None] * len(working)))
+    working["topic_label"] = classification.map(_topic_label_from_classification)
+    working["topic_confidence"] = classification.map(_topic_confidence_from_classification)
+    working["topic_reason"] = classification.map(_topic_reason_from_classification)
     return working[CANONICAL_COLUMNS].reset_index(drop=True)
 
 

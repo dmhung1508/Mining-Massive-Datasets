@@ -11,6 +11,6 @@ media
 telegram_crawler/config.py
 telegram_crawler/cfg.py
 plan.csv
-.env.example
 .vscode
 datatele/telegram_messages.parquet
+image/

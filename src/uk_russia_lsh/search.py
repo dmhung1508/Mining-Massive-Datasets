@@ -173,6 +173,21 @@ def search_similar_tweets(
     tokens = tokenize_text(normalized)
     shingles = make_word_shingles(tokens, config.shingle_size)
     if not shingles:
+        result_columns = [
+            "rank",
+            "tweet_id",
+            "user_id",
+            "source",
+            "source_item_id",
+            "source_user_id",
+            "source_channel_id",
+            "topic_label",
+            "timestamp",
+            "cluster_id",
+            "cluster_size",
+            "jaccard",
+            "text",
+        ]
         metadata = {
             "retrieval_mode": "query_too_short",
             "config_name": config.name,
@@ -180,18 +195,7 @@ def search_similar_tweets(
             "query_shingle_count": 0,
             "candidate_count": 0,
         }
-        return pd.DataFrame(
-            columns=[
-                "rank",
-                "tweet_id",
-                "user_id",
-                "timestamp",
-                "cluster_id",
-                "cluster_size",
-                "jaccard",
-                "text",
-            ]
-        ), metadata
+        return pd.DataFrame(columns=result_columns), metadata
 
     candidate_ids, candidate_meta = _query_candidates(shingles, index)
     retrieval_mode = "lsh_candidates"
@@ -212,8 +216,23 @@ def search_similar_tweets(
 
     candidate_frame = candidate_frame.merge(clusters, on="tweet_id", how="left")
     candidate_frame = candidate_frame.assign(rank=range(1, len(candidate_frame) + 1))
+    result_columns = [
+        "rank",
+        "tweet_id",
+        "user_id",
+        "source",
+        "source_item_id",
+        "source_user_id",
+        "source_channel_id",
+        "topic_label",
+        "timestamp",
+        "cluster_id",
+        "cluster_size",
+        "jaccard",
+        "text",
+    ]
     result = candidate_frame[
-        ["rank", "tweet_id", "user_id", "timestamp", "cluster_id", "cluster_size", "jaccard", "text"]
+        [column for column in result_columns if column in candidate_frame.columns]
     ].reset_index(drop=True)
 
     metadata = {

@@ -29,6 +29,28 @@ def _required_columns() -> list[str]:
     return ["tweet_id", "user_id", "text", "timestamp", "date"]
 
 
+def _metadata_columns() -> list[str]:
+    return [
+        "source",
+        "source_item_id",
+        "source_user_id",
+        "source_channel_id",
+        "media_type",
+        "forward_from_user_id",
+        "forward_from_username",
+        "topic_label",
+        "topic_confidence",
+        "topic_reason",
+    ]
+
+
+def _available_columns(column_names: list[str]) -> list[str]:
+    available = set(column_names)
+    return _required_columns() + [
+        column for column in _metadata_columns() if column in available
+    ]
+
+
 def _load_with_spark(input_path: Path, sample_size: int, seed: int) -> pd.DataFrame:
     from pyspark.sql import SparkSession, functions as F
 
@@ -41,9 +63,10 @@ def _load_with_spark(input_path: Path, sample_size: int, seed: int) -> pd.DataFr
     spark.sparkContext.setLogLevel("WARN")
 
     try:
+        source_frame = spark.read.parquet(str(input_path))
+        columns = _available_columns(source_frame.columns)
         frame = (
-            spark.read.parquet(str(input_path))
-            .select(*_required_columns())
+            source_frame.select(*columns)
             .filter(F.col("tweet_id").isNotNull())
             .filter(F.col("user_id").isNotNull())
             .filter(F.col("text").isNotNull())
@@ -68,7 +91,7 @@ def _stream_sample_with_pyarrow(
 
     dataset = ds.dataset(str(input_path), format="parquet", partitioning="hive")
     heap: list[tuple[int, int, tuple[object, ...]]] = []
-    columns = _required_columns()
+    columns = _available_columns(dataset.schema.names)
 
     for batch in dataset.to_batches(columns=columns, batch_size=8_192):
         batch_frame = batch.to_pandas()
@@ -76,7 +99,7 @@ def _stream_sample_with_pyarrow(
         for row in batch_frame.itertuples(index=False):
             tweet_id = int(row.tweet_id)
             score = _sampling_score(tweet_id, seed)
-            payload = (tweet_id, int(row.user_id), row.text, row.timestamp, row.date)
+            payload = tuple(getattr(row, column) for column in columns)
             entry = (-score, -tweet_id, payload)
 
             if len(heap) < sample_size:
