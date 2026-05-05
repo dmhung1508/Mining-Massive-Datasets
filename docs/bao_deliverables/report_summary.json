@@ -1,0 +1,7 @@
+{
+  "report_md": "docs/bao_deliverables/dataset_results_report.md",
+  "practice_md": "docs/bao_deliverables/demo_practice_checklist.md",
+  "pairs_total": 10,
+  "max_documents": 49852,
+  "demo_rows": 10
+}

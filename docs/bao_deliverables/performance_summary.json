@@ -1,0 +1,14 @@
+{
+  "benchmark_source": "docs/hung_deliverables/scalability_benchmark.csv",
+  "rows_total": 6,
+  "bruteforce_rows": 3,
+  "lsh_rows": 3,
+  "max_documents": 49852,
+  "max_pairs_considered": 1242586026,
+  "max_runtime_seconds": 5.674673,
+  "lsh_avg_candidate_reduction_percent": 99.996778,
+  "bruteforce_avg_pairs_per_second": 2938325.58,
+  "lsh_avg_pairs_per_second": 115695403.68,
+  "dashboard_png": "docs/bao_deliverables/performance_dashboard.png",
+  "table_csv": "docs/bao_deliverables/performance_table.csv"
+}

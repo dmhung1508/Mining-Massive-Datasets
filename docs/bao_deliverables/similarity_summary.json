@@ -1,0 +1,15 @@
+{
+  "pairs_total": 10,
+  "pairs_exact": 5,
+  "pairs_near_duplicate": 10,
+  "graph_components": 6,
+  "largest_graph_component": 6,
+  "cluster_rows": 5,
+  "pair_sources": [
+    "docs/hung_deliverables/exact_duplicate_examples.csv",
+    "docs/hung_deliverables/near_duplicate_examples.csv"
+  ],
+  "cluster_source": "docs/hung_deliverables/top_clusters.csv",
+  "histogram_png": "docs/bao_deliverables/similarity_histogram.png",
+  "graph_png": "docs/bao_deliverables/cluster_graph.png"
+}

@@ -1,0 +1,7 @@
+{
+  "top_clusters_rows": 5,
+  "exact_examples_rows": 5,
+  "near_examples_rows": 5,
+  "slides_md": "docs/bao_deliverables/slides_outline.md",
+  "charts_tables_csv": "docs/bao_deliverables/charts_tables.csv"
+}

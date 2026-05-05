@@ -128,7 +128,7 @@ def _write_report(rows: list[dict[str, object]], output_md: Path, config: LSHCon
     lsh = frame.loc[frame["stage"].eq("minhash_lsh_candidates")].copy()
 
     lines = [
-        "# Week 10 Benchmark - Hung",
+        "# Scalability Benchmark - Hung",
         "",
         "## Muc tieu",
         "",
@@ -155,20 +155,20 @@ def _write_report(rows: list[dict[str, object]], output_md: Path, config: LSHCon
         "",
         "- Brute-force co so cap tang theo `N * (N - 1) / 2`, nen chi dung de tao ground truth tren tap mau.",
         "- LSH sinh candidate pairs nho hon rat nhieu so voi tong so cap co the co.",
-        "- Ket qua benchmark nay dung cho task tuan 10: scalability test, runtime comparison, va toi uu demo.",
+        "- Ket qua benchmark nay dung cho task scalability test, runtime comparison, va toi uu demo.",
         "",
     ]
     output_md.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create week-10 scalability benchmark artifacts for Hung.")
+    parser = argparse.ArgumentParser(description="Create scalability benchmark artifacts for Hung.")
     parser.add_argument("--artifact-dir", default=str(DEFAULT_ARTIFACT_DIR))
     parser.add_argument("--baseline-sizes", default="400,800,1200")
     parser.add_argument("--lsh-sizes", default="5000,10000,50000")
     parser.add_argument("--threshold", type=float, default=DEFAULT_VERIFY_THRESHOLD)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--output-dir", default="docs/hung_week9_12")
+    parser.add_argument("--output-dir", default="docs/hung_deliverables")
     args = parser.parse_args()
 
     artifact_dir = ensure_artifact_dir(Path(args.artifact_dir))
@@ -187,9 +187,9 @@ def main() -> None:
         *_lsh_rows(scale_frame, lsh_sizes, config=config, seed=args.seed),
     ]
 
-    output_csv = output_dir / "week10_scalability_benchmark.csv"
-    output_json = output_dir / "week10_scalability_benchmark.json"
-    output_md = output_dir / "week10_lsh_benchmark_report.md"
+    output_csv = output_dir / "scalability_benchmark.csv"
+    output_json = output_dir / "scalability_benchmark.json"
+    output_md = output_dir / "lsh_benchmark_report.md"
 
     pd.DataFrame(rows).to_csv(output_csv, index=False)
     output_json.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -1,0 +1,62 @@
+[
+  {
+    "stage": "brute_force_jaccard",
+    "documents": 400,
+    "pairs_considered": 79800,
+    "positive_pairs": 2,
+    "candidate_pairs": "",
+    "runtime_seconds": 0.027726,
+    "pairs_per_second": 2878164.9
+  },
+  {
+    "stage": "brute_force_jaccard",
+    "documents": 800,
+    "pairs_considered": 319600,
+    "positive_pairs": 10,
+    "candidate_pairs": "",
+    "runtime_seconds": 0.103094,
+    "pairs_per_second": 3100083.42
+  },
+  {
+    "stage": "brute_force_jaccard",
+    "documents": 1200,
+    "pairs_considered": 719400,
+    "positive_pairs": 17,
+    "candidate_pairs": "",
+    "runtime_seconds": 0.253602,
+    "pairs_per_second": 2836728.42
+  },
+  {
+    "stage": "minhash_lsh_candidates",
+    "documents": 5000,
+    "pairs_considered": 12497500,
+    "positive_pairs": "",
+    "candidate_pairs": 448,
+    "runtime_seconds": 0.289794,
+    "candidate_reduction_ratio": 0.99996415,
+    "signature_runtime_seconds": 0.11072,
+    "bucket_count": 76250
+  },
+  {
+    "stage": "minhash_lsh_candidates",
+    "documents": 10000,
+    "pairs_considered": 49995000,
+    "positive_pairs": "",
+    "candidate_pairs": 1573,
+    "runtime_seconds": 0.588244,
+    "candidate_reduction_ratio": 0.99996854,
+    "signature_runtime_seconds": 0.228557,
+    "bucket_count": 150063
+  },
+  {
+    "stage": "minhash_lsh_candidates",
+    "documents": 49852,
+    "pairs_considered": 1242586026,
+    "positive_pairs": "",
+    "candidate_pairs": 36487,
+    "runtime_seconds": 5.674673,
+    "candidate_reduction_ratio": 0.99997064,
+    "signature_runtime_seconds": 2.644158,
+    "bucket_count": 683795
+  }
+]
