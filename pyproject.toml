@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "social-lsh"
+version = "0.1.0"
+description = "Near-duplicate detection on war-related social media using MinHash + LSH"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "pyarrow>=16.0",
+]
+
+[project.optional-dependencies]
+spark = ["pyspark==3.5.0", "findspark==2.0.1"]
+api = ["fastapi>=0.110", "uvicorn>=0.29"]
+dashboard = ["streamlit>=1.30", "matplotlib>=3.8"]
+telegram = ["telethon>=1.36,<2", "pymongo>=4.8,<5", "python-dotenv>=1.0,<2"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

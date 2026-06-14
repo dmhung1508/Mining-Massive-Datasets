@@ -49,6 +49,6 @@ MONGO_COLLECTION_NAME=messages
 
 Then regenerate this summary with:
 
-```powershell
-C:\Users\HungDM\AppData\Local\Python\pythoncore-3.14-64\python.exe scripts\summarize_telegram_topics.py
+```bash
+python scripts/reporting/summarize_telegram_topics.py
 ```

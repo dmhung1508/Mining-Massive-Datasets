@@ -6,9 +6,9 @@ import pandas as pd
 import pyarrow.dataset as ds
 import pytest
 
-from uk_russia_lsh.artifacts import artifact_path, read_dataframe, write_dataframe
-from uk_russia_lsh.constants import DEFAULT_INPUT_PARQUET
-from uk_russia_lsh.pipeline import build_shingles_artifacts, run_baseline, run_lsh, verify_and_cluster
+from social_lsh.artifacts import artifact_path, read_dataframe, write_dataframe
+from social_lsh.constants import DEFAULT_INPUT_PARQUET
+from social_lsh.pipeline import build_shingles_artifacts, run_baseline, run_lsh, verify_and_cluster
 
 
 @pytest.mark.skipif(not DEFAULT_INPUT_PARQUET.exists(), reason="tweets_final.parquet is not available")

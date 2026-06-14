@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from uk_russia_lsh.artifacts import artifact_path, read_dataframe, write_dataframe
-from uk_russia_lsh.pipeline import build_shingles_artifacts, run_baseline, run_lsh, verify_and_cluster
-from uk_russia_lsh.search import prepare_search_index, search_similar_tweets
+from social_lsh.artifacts import artifact_path, read_dataframe, write_dataframe
+from social_lsh.pipeline import build_shingles_artifacts, run_baseline, run_lsh, verify_and_cluster
+from social_lsh.search import prepare_search_index, search_similar_tweets
 
 
 def _synthetic_frame() -> pd.DataFrame:

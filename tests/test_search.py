@@ -2,9 +2,9 @@
 
 import pandas as pd
 
-from uk_russia_lsh.constants import LSHConfig
-from uk_russia_lsh.preprocessing import make_word_shingles, normalize_text, tokenize_text
-from uk_russia_lsh.search import build_search_index
+from social_lsh.constants import LSHConfig
+from social_lsh.preprocessing import make_word_shingles, normalize_text, tokenize_text
+from social_lsh.search import build_search_index
 
 
 def test_build_search_index_tracks_bucket_count() -> None:

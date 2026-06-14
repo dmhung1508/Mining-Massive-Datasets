@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from uk_russia_lsh.preprocessing import build_shingles, normalize_text, tokenize_text
+from social_lsh.preprocessing import build_shingles, normalize_text, tokenize_text
 
 
 def test_normalize_text_removes_urls_and_whitespace() -> None:

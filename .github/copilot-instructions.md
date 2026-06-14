@@ -1,53 +1,77 @@
-# Project Guidelines — Ukraine Conflict Twitter NLP
+# Project Guidelines — Social LSH (Near-Duplicate Detection)
 
-## Architecture
+## What this project does
 
-Research project analysing ~290 daily Twitter CSV files (Aug 2022 – mid 2023, ~13.75 GB total) on the Ukraine-Russia conflict. The goal is intelligent tweet & user recommendation using the pipeline described in `Intelligent Post and User Recommendation from War-Related Discourse.pdf`.
+Detects near-duplicate posts and narrative clusters across war-related social media
+(Twitter Ukraine-Russia dataset + Telegram messages) using **MinHash + LSH**. The pipeline
+mirrors the 10-step diagram in the project plan: collect → canonical schema → text
+preprocessing → shingling → MinHash → LSH banding → exact Jaccard verify → clustering →
+API → dashboard.
 
-**Two notebooks:**
-- `Data/code/pipeline.ipynb` — full ML pipeline (primary)
-- `Data/mine_tweets.ipynb` — exploratory data mining
+## Layout
 
-**Pipeline stages (pipeline.ipynb):**
-1. **Preprocessing** — Polars, English-only filter, strip trailing hashtags, cross-file dedup by `tweetid`
-2. **Doc2Vec** (gensim) — 100-dim tweet embeddings, saved to `output/doc2vec.model`
-3. **UMAP** (umap-learn) — 100D → 10D for clustering, 100D → 2D for visualisation
-4. **DBSCAN** (scikit-learn) — density-based clustering, cosine metric
-5. **Zero-shot topic labeling** — `facebook/bart-large-mnli` via HuggingFace `transformers`, top-50 words/cluster as input
-6. **Personalized PageRank** (networkx) — k-NN similarity graph + PPR for tweet recommendation
+```
+src/social_lsh/          # core library (importable package)
+  constants.py           # paths, seeds, thresholds, LSHConfig, CONFIG_GRID
+  datasets.py            # canonical schema, Twitter/Telegram normalisation, merge
+  preprocessing.py       # normalize_text, tokenize, word shingles
+  similarity.py          # exact Jaccard baseline + candidate verification
+  minhash.py             # MinHash signatures, LSH candidate generation, eval
+  clustering.py          # Union-Find connected components
+  pipeline.py            # orchestrates extract -> shingles -> baseline -> lsh -> verify
+  search.py              # LSH bucket index + similar-post search
+  artifacts.py           # parquet/JSON artifact IO + metrics merge
+
+scripts/                 # CLI entry points, grouped by function
+  data/                  # build_combined_dataset, export_telegram_dataset
+  pipeline/              # extract_subsets, build_shingles, run_baseline, run_lsh, verify_and_cluster
+  search/                # search_similar
+  api/                   # app.py (FastAPI), serve_api.py (uvicorn launcher)
+  visualization/         # per-stage matplotlib dashboards
+  reporting/             # benchmark, demo cases, deliverables, telegram topic summary
+  run_full_combined.sh / .ps1   # end-to-end runner
+
+telegram_crawler/        # Telethon crawler (config.py, crawler.py, utils.py)
+streamlit_app.py         # dashboard
+tests/                   # pytest suite
+```
+
+## Install and test
+
+```bash
+pip install -e ".[dev]"          # core + pytest
+pip install -e ".[api,dashboard,telegram]"   # optional extras as needed
+pytest                            # runs the full suite (src/ is on pythonpath via pyproject)
+```
+
+## Conventions
+
+- The package is pip-installed editable; scripts import `social_lsh` directly. Do **not**
+  re-add a `sys.path` bootstrap shim.
+- All generated files live under `jupyter/output/`. Key locations come from
+  `social_lsh.constants`: `DEFAULT_ARTIFACT_DIR` = `jupyter/output/lsh_combined`,
+  `DEFAULT_VISUALS_DIR` = `jupyter/output/visuals`. Avoid hardcoding absolute paths.
+- Default near-duplicate threshold is Jaccard ≥ 0.8 (`DEFAULT_VERIFY_THRESHOLD`).
+- Default shingle size k=3, num_perm=128; tuning grid is `CONFIG_GRID`.
+- Two subset sizes: `BASELINE_SIZE` (brute-force ground truth) and `SCALE_SIZE` (LSH run).
+- Artifacts are parquet; metrics accumulate in `metrics.json` via `artifacts.merge_metrics`.
 
 ## Data
 
-- Location: `F:\UK-Russia\Data\` (glob: `*_UkraineCombinedTweetsDeduped.csv`)
-- Filename formats: `MMDD_...csv` (2022) and `YYYYMMDD_...csv` (2023)
-- Key columns used: `tweetid`, `text`, `language`, `username`, `retweetcount`, `is_retweet`, `tweetcreatedts`, `hashtags`, `followers`
-- Always read with `ignore_errors=True, low_memory=True` to handle malformed rows
-- Prefer Polars (`pl.scan_csv` with `streaming=True`) over pandas for large scans
+- Twitter source: `tweets_final.parquet` (date-partitioned, hive layout) at repo root.
+- Canonical columns: `tweet_id, user_id, text, timestamp, date` plus source metadata
+  (`source`, `source_item_id`, `topic_label`, ...). See `datasets.CANONICAL_COLUMNS`.
+- Prefer pyarrow dataset streaming for large scans; Spark is used opportunistically in
+  `pipeline._load_with_spark` with a pyarrow fallback.
 
-## Build and Test
+## Pipeline order
 
-```powershell
-# Activate the project venv
-& "F:\UK-Russia\Data\.venv\Scripts\Activate.ps1"
+1. `scripts/data/build_combined_dataset.py` — merge Twitter + Telegram into canonical parquet
+2. `scripts/pipeline/extract_subsets.py` — deterministic baseline + scale subsets
+3. `scripts/pipeline/build_shingles.py` — tokenize + word shingles
+4. `scripts/pipeline/run_baseline.py` — exact Jaccard ground truth (baseline subset)
+5. `scripts/pipeline/run_lsh.py` — tune CONFIG_GRID, generate scale-set candidates
+6. `scripts/pipeline/verify_and_cluster.py` — verify pairs, Union-Find clusters
+7. `scripts/api/serve_api.py` or `streamlit_app.py` — serve results
 
-# Install all dependencies (run inside notebook cell 1, or manually):
-pip install polars pyarrow gensim umap-learn scikit-learn transformers torch networkx tqdm matplotlib seaborn
-```
-
-Outputs land in `F:\UK-Russia\Data\code\output\`:
-- `tweets_clean.parquet` — preprocessed data
-- `doc2vec.model` — trained Doc2Vec
-- `umap_clusters.png`, `topic_distribution.png` — visualisations
-
-## Project Conventions
-
-- **Test on a subset first**: set `MAX_FILES = 5` and `MAX_SAMPLE = 10_000` before running full dataset
-- Key tunable constants are declared in the Config cell (cell 2 of `pipeline.ipynb`): `MAX_FILES`, `CHUNK_SIZE`, `MAX_SAMPLE`, `DBSCAN_EPS`, `DBSCAN_MIN_SAMP`, `UMAP_N_NEIGHBORS`, `UMAP_N_COMPONENTS`, `KNN_K`, `PPR_ALPHA`
-- UMAP is reused at inference time (`reducer.transform()`), so the reducer must stay in scope for `recommend_ppr()`
-- Cross-file deduplication uses an in-memory `seen_ids: set` — do not reset between files
-- The k-NN graph is built in batches of 2000 nodes to avoid OOM on the similarity matrix
-
-## Integration Points
-
-- `bart-large-mnli` (~1.6 GB) is downloaded on first run from HuggingFace; set `device=0` if a CUDA GPU is available (default is CPU `device=-1`)
-- Doc2Vec inference for new queries uses `model_d2v.infer_vector(tokens, epochs=30)` then `reducer.transform()` for UMAP projection
+Or run everything: `scripts/run_full_combined.sh`.

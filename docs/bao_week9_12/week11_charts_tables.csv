@@ -1,7 +1,0 @@
-slide,asset_type,asset_path,message
-3,chart,docs/bao_week9_12/similarity_histogram.png,Similarity histogram cho thay phan bo pair near-duplicate
-4,chart,docs/bao_week9_12/cluster_graph.png,Cluster graph minh hoa cac nhom noi dung lap
-5,chart,docs/bao_week9_12/performance_dashboard.png,So sanh hieu nang brute-force va MinHash + LSH
-6,table,docs/hung_week9_12/week11_top_clusters.csv,Top clusters duoc dung lam case demo
-7,table,docs/hung_week9_12/week11_exact_duplicate_examples.csv,Exact duplicate examples (Jaccard = 1.0)
-8,table,docs/hung_week9_12/week11_near_duplicate_examples.csv,Near duplicate examples (0.8 <= Jaccard < 1.0)

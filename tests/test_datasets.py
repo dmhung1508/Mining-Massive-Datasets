@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from uk_russia_lsh.datasets import build_combined_dataset, export_telegram_dataset
+from social_lsh.datasets import build_combined_dataset, export_telegram_dataset
 
 
 def _write_twitter_parquet(path: Path) -> None:

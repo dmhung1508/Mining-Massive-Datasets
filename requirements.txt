@@ -7,3 +7,5 @@ pyarrow==16.1.0
 pytest==8.3.2
 matplotlib==3.8.4
 streamlit==1.55.0
+fastapi==0.115.0
+uvicorn==0.30.0

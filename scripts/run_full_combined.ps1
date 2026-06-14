@@ -1,5 +1,5 @@
 param(
-    [string]$Python = "C:\Users\HungDM\AppData\Local\Python\pythoncore-3.14-64\python.exe",
+    [string]$Python = "python",
     [string]$TelegramOutput = "jupyter\output\telegram_messages.parquet",
     [string]$CombinedOutput = "jupyter\output\combined_social.parquet",
     [string]$ArtifactDir = "jupyter\output\lsh_combined",
@@ -29,13 +29,9 @@ function Run-Step {
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
-if (-not (Test-Path $Python)) {
-    throw "Python not found: $Python"
-}
-
 if (-not $SkipMongoExport) {
     Run-Step "Export Telegram Mongo -> Parquet" @(
-        "scripts\export_telegram_dataset.py",
+        "scripts\data\export_telegram_dataset.py",
         "--source", "mongo",
         "--output", $TelegramOutput,
         "--overwrite"
@@ -44,7 +40,7 @@ if (-not $SkipMongoExport) {
 
 if (-not $SkipMerge) {
     Run-Step "Merge Twitter + Telegram -> Combined Parquet" @(
-        "scripts\build_combined_dataset.py",
+        "scripts\data\build_combined_dataset.py",
         "--telegram-source", "mongo",
         "--output", $CombinedOutput,
         "--overwrite"
@@ -52,7 +48,7 @@ if (-not $SkipMerge) {
 }
 
 Run-Step "Extract deterministic subsets" @(
-    "scripts\extract_subsets.py",
+    "scripts\pipeline\extract_subsets.py",
     "--input", $CombinedOutput,
     "--artifact-dir", $ArtifactDir,
     "--baseline-size", "$BaselineSize",
@@ -60,27 +56,27 @@ Run-Step "Extract deterministic subsets" @(
 )
 
 Run-Step "Build shingles" @(
-    "scripts\build_shingles.py",
+    "scripts\pipeline\build_shingles.py",
     "--artifact-dir", $ArtifactDir
 )
 
 Run-Step "Run exact Jaccard baseline" @(
-    "scripts\run_baseline.py",
+    "scripts\pipeline\run_baseline.py",
     "--artifact-dir", $ArtifactDir
 )
 
 Run-Step "Run MinHash + LSH" @(
-    "scripts\run_lsh.py",
+    "scripts\pipeline\run_lsh.py",
     "--artifact-dir", $ArtifactDir
 )
 
 Run-Step "Verify candidates and build clusters" @(
-    "scripts\verify_and_cluster.py",
+    "scripts\pipeline\verify_and_cluster.py",
     "--artifact-dir", $ArtifactDir
 )
 
 $searchArgs = @(
-    "scripts\search_similar.py",
+    "scripts\search\search_similar.py",
     "--artifact-dir", $ArtifactDir,
     "--text", "Russia Ukraine war update",
     "--top-k", "5"
@@ -99,4 +95,4 @@ Write-Host "Open metrics:"
 Write-Host "  Get-Content $ArtifactDir\metrics.json"
 Write-Host ""
 Write-Host "Serve API:"
-Write-Host "  & `"$Python`" scripts\serve_api.py --artifact-dir $ArtifactDir --port 8765"
+Write-Host "  & $Python scripts\api\serve_api.py --artifact-dir $ArtifactDir --port 8765"

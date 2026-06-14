@@ -3,7 +3,7 @@ Utility script để sử dụng TelegramCrawler
 """
 import asyncio
 import argparse
-from telegram_crawler import TelegramCrawler
+from crawler import TelegramCrawler
 from pymongo import MongoClient
 import json
 from config import (

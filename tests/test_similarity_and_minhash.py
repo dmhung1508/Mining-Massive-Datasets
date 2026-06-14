@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pandas as pd
 
-from uk_russia_lsh.constants import LSHConfig
-from uk_russia_lsh.minhash import evaluate_candidates, run_config
-from uk_russia_lsh.similarity import exact_jaccard_pairs, jaccard_similarity
+from social_lsh.constants import LSHConfig
+from social_lsh.minhash import evaluate_candidates, run_config
+from social_lsh.similarity import exact_jaccard_pairs, jaccard_similarity
 
 
 def test_jaccard_similarity_matches_expected_value() -> None:
