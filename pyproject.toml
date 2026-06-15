@@ -19,6 +19,7 @@ spark = ["pyspark==3.5.0", "findspark==2.0.1"]
 api = ["fastapi>=0.110", "uvicorn>=0.29"]
 dashboard = ["streamlit>=1.30", "matplotlib>=3.8"]
 telegram = ["telethon>=1.36,<2", "pymongo>=4.8,<5", "python-dotenv>=1.0,<2"]
+media = ["requests>=2.31", "python-dotenv>=1.0,<2"]
 dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]

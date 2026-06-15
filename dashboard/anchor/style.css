@@ -1,0 +1,220 @@
+:root {
+  --news-red: #c8102e;
+  --news-red-dark: #8c0a20;
+  --news-blue: #0a2342;
+  --news-blue-light: #15407a;
+  --gold: #e8b54a;
+  --text: #ffffff;
+  --ink: #0a1626;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; overflow: hidden; background: #000; font-family: "Be Vietnam Pro", system-ui, "Segoe UI", Roboto, sans-serif; }
+
+/* 16:9 stage that fills the viewport */
+.broadcast {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  color: var(--text);
+}
+
+.bg {
+  position: absolute; inset: 0;
+  background: #0a1626 center/cover no-repeat;
+  z-index: 0;
+}
+.bg::after { /* subtle vignette for studio depth */
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 40%, transparent 40%, rgba(0,0,0,0.45) 100%);
+}
+
+/* Live2D anchor sits center-right like a real presenter */
+.anchor {
+  position: absolute;
+  right: 4%;
+  bottom: 0;
+  width: 60%;
+  height: 96%;
+  z-index: 2;
+}
+
+/* Picture-in-picture news illustration, upper-left */
+.pip {
+  position: absolute;
+  left: 3%;
+  top: 12%;
+  width: 34%;
+  aspect-ratio: 1 / 1;
+  max-height: 52%;
+  z-index: 3;
+  border: 3px solid rgba(255,255,255,0.85);
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  overflow: hidden;
+  background: #0a1626;
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.pip.show { opacity: 1; transform: translateY(0) scale(1); }
+.pip-img { position: absolute; inset: 0; background: #0a1626 center/cover no-repeat; }
+.pip-tag {
+  position: absolute; left: 0; bottom: 0;
+  background: var(--news-red); color: #fff;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 4px 10px;
+}
+
+/* Top bar */
+.topbar {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 56px; z-index: 5;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 18px;
+  background: linear-gradient(180deg, rgba(10,35,66,0.92), rgba(10,35,66,0.0));
+}
+.logo {
+  font-weight: 800; font-size: 24px; letter-spacing: 1px;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+}
+.logo span { background: var(--news-red); padding: 0 8px; border-radius: 4px; }
+.top-right { display: flex; align-items: center; gap: 16px; }
+.live {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--news-red); font-weight: 700; font-size: 13px;
+  padding: 5px 12px; border-radius: 4px; letter-spacing: 0.5px;
+}
+.live i { width: 9px; height: 9px; border-radius: 50%; background: #fff; animation: blink 1s infinite; }
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+.clock { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 15px; background: rgba(0,0,0,0.35); padding: 5px 10px; border-radius: 4px; }
+
+/* Lower third */
+.lower-third {
+  position: absolute; left: 0; bottom: 64px; z-index: 5;
+  max-width: 78%;
+  transform: translateX(-4px);
+}
+.lt-topic {
+  display: inline-block;
+  background: var(--news-red);
+  color: #fff; font-weight: 800; font-size: 15px; letter-spacing: 1px;
+  padding: 6px 16px; text-transform: uppercase;
+}
+.lt-headline {
+  background: linear-gradient(90deg, var(--news-blue) 0%, var(--news-blue-light) 100%);
+  color: #fff; font-weight: 700; font-size: 30px; line-height: 1.2;
+  padding: 12px 20px; max-width: 900px;
+  border-left: 6px solid var(--gold);
+}
+.lt-sub {
+  background: rgba(10,35,66,0.85);
+  color: #dfe8f5; font-size: 16px; line-height: 1.4;
+  padding: 8px 20px; max-width: 900px;
+  min-height: 0;
+}
+.lt-sub:empty { display: none; }
+
+/* Breaking ticker */
+.ticker {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+  height: 44px; display: flex; align-items: stretch;
+  background: rgba(10,22,38,0.96);
+  border-top: 2px solid var(--gold);
+}
+.ticker-label {
+  background: var(--news-red); color: #fff;
+  font-weight: 800; font-size: 14px; letter-spacing: 1px;
+  display: flex; align-items: center; padding: 0 18px; white-space: nowrap;
+}
+.ticker-track { flex: 1; overflow: hidden; position: relative; }
+.ticker-text {
+  position: absolute; white-space: nowrap; left: 0;
+  top: 50%;
+  font-size: 17px; font-weight: 500; color: #eaf1fb;
+  padding-left: 100%;
+  will-change: transform;
+  animation: scroll-left 50s linear infinite;
+}
+@keyframes scroll-left {
+  from { transform: translate(0, -50%); }
+  to   { transform: translate(-100%, -50%); }
+}
+
+/* Controls overlay */
+.controls {
+  position: absolute; top: 64px; left: 16px; z-index: 7;
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(10,22,38,0.7);
+  padding: 8px 12px; border-radius: 8px;
+  backdrop-filter: blur(4px);
+  font-size: 13px;
+}
+.controls label { display: flex; align-items: center; gap: 6px; color: #cfe; }
+.controls input[type="number"] { width: 48px; padding: 4px; background: #0a1626; color: #fff; border: 1px solid #2a4a72; border-radius: 5px; }
+.controls .chk input { accent-color: var(--news-red); }
+.controls button {
+  background: var(--news-red); color: #fff; border: none;
+  padding: 7px 14px; border-radius: 6px; font-weight: 700; cursor: pointer;
+}
+.controls button:disabled { opacity: 0.45; cursor: not-allowed; }
+.controls button:last-child { background: #2a4a72; }
+
+.status {
+  position: absolute; right: 16px; bottom: 56px; z-index: 7;
+  background: rgba(0,0,0,0.5); color: #9fb6d4;
+  font-size: 12px; padding: 5px 12px; border-radius: 5px;
+}
+
+/* ===== Earth intro overlay ===== */
+.intro {
+  position: absolute; inset: 0; z-index: 20;
+  background: radial-gradient(ellipse at 50% 45%, #0a1a3a 0%, #05030f 70%);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.8s ease, visibility 0.8s ease;
+}
+.intro.hidden { opacity: 0; visibility: hidden; }
+
+.intro-canvas { position: absolute; inset: 0; z-index: 1; }
+.intro-canvas.fade-out { transition: opacity 0.9s ease; opacity: 0; }
+
+/* Big centered start button sits ABOVE the intro canvas/title */
+.start-btn {
+  position: relative; z-index: 5;
+  background: var(--news-red); color: #fff; border: none;
+  font-size: 22px; font-weight: 800; letter-spacing: 1px;
+  padding: 18px 42px; border-radius: 10px; cursor: pointer;
+  box-shadow: 0 10px 40px rgba(200,16,46,0.5);
+  transition: transform 0.15s ease, opacity 0.4s ease;
+}
+.start-btn:hover { transform: scale(1.05); }
+.start-btn.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+
+/* Title is hidden while the globe spins, revealed in the title phase */
+.intro-title {
+  position: absolute; z-index: 3; left: 0; right: 0;
+  text-align: center; bottom: 16vh;
+  opacity: 0; visibility: hidden;
+  transition: opacity 0.8s ease;
+}
+.intro-title.show { opacity: 1; visibility: visible; animation: introRise 1s ease-out both; }
+@keyframes introRise {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.intro-kicker {
+  display: inline-block; background: var(--news-red);
+  color: #fff; font-weight: 800; letter-spacing: 3px;
+  font-size: 16px; padding: 6px 18px; border-radius: 4px; margin-bottom: 14px;
+}
+.intro-main {
+  font-size: clamp(2rem, 6vw, 4.2rem); font-weight: 800;
+  letter-spacing: 2px; color: #fff;
+  text-shadow: 0 4px 30px rgba(47,111,255,0.55);
+}
+.intro-sub {
+  margin-top: 10px; font-size: clamp(0.9rem, 2.2vw, 1.2rem);
+  color: #aecbff; letter-spacing: 1px;
+}

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI NEWS 24 — Bản tin tổng hợp</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Full-screen broadcast stage -->
+  <div class="broadcast">
+    <!-- Background studio image -->
+    <div class="bg" id="bg"></div>
+
+    <!-- Earth intro overlay (Three.js canvas mounts here) -->
+    <div class="intro" id="intro">
+      <button id="startBtn" class="start-btn">▶ BẮT ĐẦU BẢN TIN</button>
+      <div class="intro-title" id="introTitle">
+        <div class="intro-kicker">AI NEWS 24</div>
+        <div class="intro-main">BẢN TIN TỔNG HỢP</div>
+        <div class="intro-sub">Tổng hợp &amp; phân cụm tin tức từ mạng xã hội</div>
+      </div>
+    </div>
+
+    <!-- News illustration shown over the studio (picture-in-picture) -->
+    <div class="pip" id="pip">
+      <div class="pip-img" id="pipImg"></div>
+      <span class="pip-tag">HÌNH ẢNH MINH HỌA</span>
+    </div>
+
+    <!-- Live2D anchor -->
+    <canvas id="live2d" class="anchor"></canvas>
+
+    <!-- Top bar: logo + live + clock -->
+    <div class="topbar">
+      <div class="logo">AI&nbsp;NEWS&nbsp;<span>24</span></div>
+      <div class="top-right">
+        <span class="live"><i></i>TRỰC TIẾP</span>
+        <span class="clock" id="clock">--:--:--</span>
+      </div>
+    </div>
+
+    <!-- Lower third: headline + topic -->
+    <div class="lower-third" id="lowerThird">
+      <div class="lt-topic" id="ltTopic">BẢN TIN</div>
+      <div class="lt-headline" id="ltHeadline">Nhấn “Bắt đầu” để phát bản tin</div>
+      <div class="lt-sub" id="ltSub"></div>
+    </div>
+
+    <!-- Breaking ticker -->
+    <div class="ticker">
+      <div class="ticker-label">TIN NÓNG</div>
+      <div class="ticker-track"><div class="ticker-text" id="tickerText">Bản tin tổng hợp tự động từ mạng xã hội — phát hiện cụm tin bằng MinHash + LSH.</div></div>
+    </div>
+
+    <!-- Control overlay (top-left, unobtrusive) -->
+    <div class="controls" id="controls">
+      <label>Số tin <input id="topN" type="number" min="1" max="20" value="5" /></label>
+      <label class="chk"><input id="useLlm" type="checkbox" /> Grok</label>
+      <button id="stopBtn" disabled>■ Dừng</button>
+    </div>
+
+    <div class="status" id="status">Sẵn sàng.</div>
+  </div>
+
+  <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+
+  <!-- Resolve bare "three" imports used by the intro helpers -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js"
+    }
+  }
+  </script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
