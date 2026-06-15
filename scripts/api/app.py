@@ -89,6 +89,10 @@ def _warm_search_index() -> None:
     except FileNotFoundError:
         # Pipeline artifacts not generated yet; /search will report the issue.
         pass
+    except Exception as exc:
+        # The broadcast UI should still boot even if the optional search index
+        # is unavailable or too large to warm eagerly.
+        print(f"  [warn] search warmup skipped: {exc}")
 
 
 @app.get("/health")
@@ -356,6 +360,96 @@ def _balanced_latest_clusters(ranked: pd.DataFrame, merged: pd.DataFrame, top_n:
     return selected[[column for column in ranked.columns if column in selected.columns]].reset_index(drop=True)
 
 
+_NEWS_STOPWORDS = {
+    "the", "and", "for", "that", "with", "this", "from", "have", "has", "are", "was", "were", "will", "after",
+    "about", "into", "says", "said", "read", "more", "news", "update", "breaking", "today", "tonight",
+}
+
+
+def _story_key(text: str) -> str:
+    blob = str(text).lower()
+    if "strait of hormuz" in blob and ("peace deal" in blob or "deal" in blob):
+        return "us_iran_hormuz_deal"
+    if "beirut" in blob or "dahiyeh" in blob or "lebanon" in blob:
+        return "lebanon_beirut_ceasefire"
+    if "sumy" in blob:
+        return "ukraine_sumy_attack"
+    if "kaliningrad" in blob:
+        return "kaliningrad_claim"
+    return ""
+
+
+def _story_tokens(text: str) -> set[str]:
+    tokens = {
+        token
+        for token in __import__("re").findall(r"[a-z0-9]+", str(text).lower())
+        if len(token) > 2 and token not in _NEWS_STOPWORDS
+    }
+    # Collapse common variants so near-identical social posts compare better.
+    if "ukrainian" in tokens:
+        tokens.add("ukraine")
+    if "russian" in tokens:
+        tokens.add("russia")
+    return tokens
+
+
+def _token_jaccard(left: set[str], right: set[str]) -> float:
+    if not left and not right:
+        return 1.0
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _cluster_representative_text(cluster_id: int, merged: pd.DataFrame) -> str:
+    members = merged.loc[merged["cluster_id"].eq(cluster_id)]
+    if members.empty or "text" not in members.columns:
+        return ""
+    if "shingle_count" in members.columns:
+        members = members.sort_values(["shingle_count", "tweet_id"], ascending=[False, True])
+    return str(members.iloc[0].get("text") or "")
+
+
+def _select_diverse_news_clusters(ranked: pd.DataFrame, merged: pd.DataFrame, top_n: int) -> pd.DataFrame:
+    """Pick distinct storylines, not merely distinct LSH clusters."""
+    selected_rows: list[pd.Series] = []
+    selected_ids: set[int] = set()
+    selected_keys: set[str] = set()
+    selected_tokens: list[set[str]] = []
+
+    for _, row in ranked.iterrows():
+        cluster_id = int(row["cluster_id"])
+        if cluster_id in selected_ids:
+            continue
+        text = _cluster_representative_text(cluster_id, merged)
+        story_key = _story_key(text)
+        tokens = _story_tokens(text)
+        if story_key and story_key in selected_keys:
+            continue
+        if tokens and any(_token_jaccard(tokens, previous) >= 0.55 for previous in selected_tokens):
+            continue
+        selected_rows.append(row)
+        selected_ids.add(cluster_id)
+        if story_key:
+            selected_keys.add(story_key)
+        if tokens:
+            selected_tokens.append(tokens)
+        if len(selected_rows) >= top_n:
+            break
+
+    if len(selected_rows) < top_n:
+        for _, row in ranked.iterrows():
+            cluster_id = int(row["cluster_id"])
+            if cluster_id in selected_ids:
+                continue
+            selected_rows.append(row)
+            selected_ids.add(cluster_id)
+            if len(selected_rows) >= top_n:
+                break
+
+    return pd.DataFrame(selected_rows).reset_index(drop=True)
+
+
 def _build_news_items(
     top_n: int,
     samples_per_cluster: int,
@@ -388,11 +482,13 @@ def _build_news_items(
 
     scale = _load_scale_for_news(needed_ids=needed_ids, artifact_dir=artifact_dir)
     pool_merged = pool_members.merge(scale, on="tweet_id", how="left")
-    ranked = (
-        _balanced_latest_clusters(ranked_pool, pool_merged, top_n)
+    candidate_count = max(top_n * 6, top_n)
+    ranked_candidates = (
+        _balanced_latest_clusters(ranked_pool, pool_merged, candidate_count)
         if artifact_dir.name == "lsh_latest"
-        else ranked_pool.head(top_n)
+        else ranked_pool.head(candidate_count)
     )
+    ranked = _select_diverse_news_clusters(ranked_candidates, pool_merged, top_n)
     top_cluster_ids = set(ranked["cluster_id"].tolist())
     merged = pool_merged[pool_merged["cluster_id"].isin(top_cluster_ids)]
 
@@ -463,16 +559,16 @@ def broadcast(
     return {"news": items, "segments": segments, "artifact_dir": str(artifact_dir), "source": artifact_dir.name}
 
 
-def _generate_one_image(client, item: dict[str, Any], cache_id: str) -> bool:
+def _generate_one_image(client, item: dict[str, Any], cache_id: str, force: bool = False) -> bool:
     """Generate one cluster image with OpenAI. Returns True if a new image was created."""
     cluster_id = item.get("cluster_id")
     target = image_file(cache_id, cluster_id)
-    if target.exists():
+    if target.exists() and not force:
         item["image_path"] = public_image_path(cache_id, cluster_id)
         return False
 
     legacy = legacy_image_file(cluster_id)
-    if legacy.exists():
+    if legacy.exists() and not force:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(legacy, target)
         item["image_path"] = public_image_path(cache_id, cluster_id)
@@ -551,7 +647,7 @@ def _generate_fallback_image(item: dict[str, Any], target: Path, cache_id: str) 
         y += 46
 
     draw.rounded_rectangle((70, 870, 954, 944), radius=20, outline=(130, 205, 255), width=3)
-    draw.text((96, 890), "Generated fallback visual - remote image API timed out", fill=(180, 225, 255), font=tag_font)
+    draw.text((96, 890), "AI-generated news visual unavailable - using editorial card", fill=(180, 225, 255), font=tag_font)
 
     target.parent.mkdir(parents=True, exist_ok=True)
     image.save(target, format="PNG")
@@ -559,7 +655,7 @@ def _generate_fallback_image(item: dict[str, Any], target: Path, cache_id: str) 
     return True
 
 
-def _generate_images_for(items: list[dict[str, Any]], cache_id: str, quality: str = "low") -> int:
+def _generate_images_for(items: list[dict[str, Any]], cache_id: str, quality: str = "low", force: bool = False) -> int:
     """Generate any missing cluster illustrations in parallel (OpenAI Images API)."""
     try:
         client = OpenAIImageClient.from_env()
@@ -571,7 +667,7 @@ def _generate_images_for(items: list[dict[str, Any]], cache_id: str, quality: st
     from concurrent.futures import ThreadPoolExecutor
 
     with ThreadPoolExecutor(max_workers=min(2, max(1, len(items)))) as pool:
-        results = list(pool.map(lambda it: _generate_one_image(client, it, cache_id), items))
+        results = list(pool.map(lambda it: _generate_one_image(client, it, cache_id, force=force), items))
     return sum(1 for r in results if r)
 
 
@@ -633,7 +729,7 @@ def prepare(
 
     images_created = 0
     if images:
-        images_created = _generate_images_for(items, cache_id)
+        images_created = _generate_images_for(items, cache_id, force=force)
 
     segments = build_broadcast_segments(items)
     audio_created = _attach_cached_audio(segments, force=force) if audio else 0

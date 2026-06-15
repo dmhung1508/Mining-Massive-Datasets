@@ -29,6 +29,7 @@ DEFAULT_METRICS_PATH = DEFAULT_ARTIFACT_DIR / "metrics.json"
 # Default location for the merged Twitter + Telegram dataset.
 DEFAULT_COMBINED_DATASET = OUTPUT_ROOT / "combined_social.parquet"
 DEFAULT_TELEGRAM_EXPORT = OUTPUT_ROOT / "telegram_messages.parquet"
+DEFAULT_X_EXPORT = OUTPUT_ROOT / "x_messages.parquet"
 
 # Default directory for weekly visualization artifacts (was the ad-hoc "datatele").
 DEFAULT_VISUALS_DIR = OUTPUT_ROOT / "visuals"

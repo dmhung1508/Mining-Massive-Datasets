@@ -94,6 +94,17 @@ def prepare_search_index(
     force_rebuild: bool = False,
 ) -> Path:
     artifact_root = ensure_artifact_dir(artifact_dir or DEFAULT_ARTIFACT_DIR)
+    try:
+        from .full_search import FULL_SEARCH_DB, full_search_available
+    except ModuleNotFoundError:
+        FULL_SEARCH_DB = "full_search.duckdb"
+
+        def full_search_available(_: Path) -> bool:
+            return False
+
+    if full_search_available(artifact_root):
+        return artifact_root / FULL_SEARCH_DB
+
     index_path = artifact_path("search_index", artifact_root)
 
     if index_path.exists() and not force_rebuild:
@@ -157,6 +168,23 @@ def search_similar_tweets(
     seed: int = DEFAULT_SEED,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     artifact_root = ensure_artifact_dir(artifact_dir or DEFAULT_ARTIFACT_DIR)
+    try:
+        from .full_search import full_search_available, search_full_corpus
+    except ModuleNotFoundError:
+
+        def full_search_available(_: Path) -> bool:
+            return False
+
+        search_full_corpus = None
+
+    if full_search_available(artifact_root) and search_full_corpus is not None:
+        return search_full_corpus(
+            query_text=query_text,
+            artifact_dir=artifact_root,
+            top_k=top_k,
+            min_jaccard=min_jaccard,
+        )
+
     index_path = prepare_search_index(artifact_root, seed=seed)
     index = _read_search_index(index_path)
     scale_df = _load_scale_shingles(artifact_root)

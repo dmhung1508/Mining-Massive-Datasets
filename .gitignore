@@ -19,3 +19,7 @@ session.session
 .vscode
 image/
 plan.csv
+.playwright-mcp/
+external/
+api_server*.log
+ami_web_source.png

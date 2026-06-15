@@ -4,6 +4,7 @@ set -euo pipefail
 # End-to-end pipeline: export Telegram -> merge with Twitter -> LSH stages -> search index.
 PYTHON_BIN="${PYTHON_BIN:-python}"
 TELEGRAM_OUTPUT="${TELEGRAM_OUTPUT:-jupyter/output/telegram_messages.parquet}"
+X_OUTPUT="${X_OUTPUT:-jupyter/output/x_messages.parquet}"
 COMBINED_OUTPUT="${COMBINED_OUTPUT:-jupyter/output/combined_social.parquet}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-jupyter/output/lsh_combined}"
 BASELINE_SIZE="${BASELINE_SIZE:-3000}"
@@ -28,10 +29,14 @@ if [[ "$SKIP_MONGO_EXPORT" != "1" ]]; then
     --source mongo \
     --output "$TELEGRAM_OUTPUT" \
     --overwrite
+  run_step "Export X Mongo -> Parquet" \
+    scripts/data/export_x_dataset.py \
+    --output "$X_OUTPUT" \
+    --overwrite
 fi
 
 if [[ "$SKIP_MERGE" != "1" ]]; then
-  run_step "Merge Twitter + Telegram -> Combined Parquet" \
+  run_step "Merge Twitter + Telegram + X -> Combined Parquet" \
     scripts/data/build_combined_dataset.py \
     --telegram-source mongo \
     --output "$COMBINED_OUTPUT" \

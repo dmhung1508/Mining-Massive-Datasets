@@ -60,7 +60,7 @@ html, body { height: 100%; overflow: hidden; background: #000; font-family: "Be 
   transition: opacity 0.4s ease, transform 0.4s ease;
 }
 .pip.show { opacity: 1; transform: translateY(0) scale(1); }
-.pip-img { position: absolute; inset: 0; background: #0a1626 center/cover no-repeat; }
+.pip-img { position: absolute; inset: 0; background: #0a1626 center/contain no-repeat; }
 .pip-tag {
   position: absolute; left: 0; bottom: 0;
   background: var(--news-red); color: #fff;
@@ -136,7 +136,7 @@ html, body { height: 100%; overflow: hidden; background: #000; font-family: "Be 
   font-size: 17px; font-weight: 500; color: #eaf1fb;
   padding-left: 100%;
   will-change: transform;
-  animation: scroll-left 50s linear infinite;
+  animation: scroll-left 95s linear infinite;
 }
 @keyframes scroll-left {
   from { transform: translate(0, -50%); }

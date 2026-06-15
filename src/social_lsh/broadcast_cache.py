@@ -11,7 +11,7 @@ from .artifacts import artifact_path
 from .constants import REPO_ROOT
 
 
-CACHE_VERSION = 1
+CACHE_VERSION = 5
 NEWS_DIR = REPO_ROOT / "jupyter" / "output" / "news"
 IMAGES_DIR = NEWS_DIR / "images"
 METADATA_DIR = NEWS_DIR / "metadata"

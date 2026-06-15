@@ -15,8 +15,10 @@ from .datasets import (
     build_recent_window_dataset,
     default_combined_dataset_path,
     default_telegram_export_path,
+    default_x_export_path,
     default_twitter_dataset_path,
     export_telegram_dataset,
+    export_x_dataset,
     normalise_x_frame,
 )
 from .pipeline import (
@@ -44,8 +46,10 @@ __all__ = [
     "build_shingles_artifacts",
     "default_combined_dataset_path",
     "default_telegram_export_path",
+    "default_x_export_path",
     "default_twitter_dataset_path",
     "export_telegram_dataset",
+    "export_x_dataset",
     "normalise_x_frame",
     "extract_subsets",
     "prepare_search_index",

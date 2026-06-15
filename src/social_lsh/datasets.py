@@ -18,6 +18,7 @@ from .constants import (
     DEFAULT_COMBINED_DATASET,
     DEFAULT_INPUT_PARQUET,
     DEFAULT_TELEGRAM_EXPORT,
+    DEFAULT_X_EXPORT,
     REPO_ROOT,
 )
 
@@ -174,6 +175,10 @@ def default_telegram_export_path() -> Path:
     return DEFAULT_TELEGRAM_EXPORT
 
 
+def default_x_export_path() -> Path:
+    return DEFAULT_X_EXPORT
+
+
 def default_combined_dataset_path() -> Path:
     return DEFAULT_COMBINED_DATASET
 
@@ -325,6 +330,9 @@ def normalise_x_frame(frame: pd.DataFrame, topic_label: str | None = None) -> pd
     records = frame.to_dict(orient="records")
     rows: list[dict[str, Any]] = []
     for row in records:
+        if row.get("shouldKeep") is False:
+            continue
+
         raw_text = _first_present(row, _X_FIELD_CANDIDATES["text"])
         text = _collapse_text(raw_text)
         if not text:
@@ -340,6 +348,8 @@ def normalise_x_frame(frame: pd.DataFrame, topic_label: str | None = None) -> pd
         source_item_id = str(raw_id) if raw_id is not None else _stable_text_id(text + str(raw_ts))
         raw_user = _first_present(row, _X_FIELD_CANDIDATES["user_id"])
         source_user_id = str(raw_user) if raw_user is not None else "unknown"
+        has_media = bool(row.get("hasMedia")) or bool(row.get("media"))
+        llm_payload = row.get("llm")
 
         rows.append(
             {
@@ -352,12 +362,12 @@ def normalise_x_frame(frame: pd.DataFrame, topic_label: str | None = None) -> pd
                 "source_item_id": source_item_id,
                 "source_user_id": source_user_id,
                 "source_channel_id": None,
-                "media_type": None,
+                "media_type": "media" if has_media else None,
                 "forward_from_user_id": None,
                 "forward_from_username": None,
                 "topic_label": _x_topic_from_row(row, topic_label),
-                "topic_confidence": None,
-                "topic_reason": None,
+                "topic_confidence": _nested_value(llm_payload, "relevance_score"),
+                "topic_reason": _nested_value(llm_payload, "reason"),
             }
         )
 
@@ -492,6 +502,37 @@ def load_mongo_collection(
     return frame.loc[parsed.notna() & (parsed >= since_ts)].reset_index(drop=True)
 
 
+def load_x_posts_from_mongo(
+    mongo_uri: str,
+    db_name: str = "news_monitoring",
+) -> pd.DataFrame:
+    try:
+        from pymongo import MongoClient
+    except ImportError as exc:
+        raise RuntimeError("pymongo is required to read X data from MongoDB") from exc
+
+    collections = {
+        "x_russia_ukraine_posts": "russia_ukraine_war",
+        "x_us_iran_posts": "us_iran_war",
+    }
+    client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+    frames: list[pd.DataFrame] = []
+    try:
+        client.admin.command("ping")
+        database = client[db_name]
+        for collection_name, topic_label in collections.items():
+            rows = list(database[collection_name].find({}, {"_id": 0}))
+            frame = normalise_x_frame(pd.DataFrame(rows), topic_label)
+            if not frame.empty:
+                frames.append(frame)
+    finally:
+        client.close()
+    if not frames:
+        return _empty_canonical_frame()
+    combined = pd.concat(frames, ignore_index=True)
+    return combined.drop_duplicates(subset=["tweet_id"], keep="first").reset_index(drop=True)
+
+
 def load_telegram_messages_from_jsonl(local_data_dir: Path | str) -> pd.DataFrame:
     directory = Path(local_data_dir)
     if not directory.exists():
@@ -575,6 +616,32 @@ def export_telegram_dataset(
     }
 
 
+def export_x_dataset(
+    output_path: Path | str,
+    mongo_uri: str | None = None,
+    db_name: str = "news_monitoring",
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    target = _prepare_output_path(output_path, overwrite=overwrite)
+    resolved_mongo_uri = mongo_uri or _load_repo_telegram_defaults().get("mongo_uri")
+    if not resolved_mongo_uri:
+        raise ValueError("MONGO_URI is required to export X posts")
+    x_frame = load_x_posts_from_mongo(resolved_mongo_uri, db_name=db_name)
+    _write_canonical_frame(x_frame, target)
+    return {
+        "output_path": str(target),
+        "x_rows": int(len(x_frame)),
+        "topic_counts": {
+            str(key): int(value)
+            for key, value in x_frame["topic_label"].value_counts().to_dict().items()
+        } if not x_frame.empty else {},
+        "date_range": {
+            "min": x_frame["date"].min() if not x_frame.empty else None,
+            "max": x_frame["date"].max() if not x_frame.empty else None,
+        },
+    }
+
+
 def build_combined_dataset(
     output_path: Path | str,
     twitter_input_path: Path | str | None = None,
@@ -583,6 +650,9 @@ def build_combined_dataset(
     telegram_db_name: str | None = None,
     telegram_collection_name: str | None = None,
     telegram_local_data_dir: Path | str | None = None,
+    include_x_mongo: bool = False,
+    x_mongo_uri: str | None = None,
+    x_db_name: str = "news_monitoring",
     batch_size: int = 100_000,
     overwrite: bool = False,
 ) -> dict[str, Any]:
@@ -617,7 +687,15 @@ def build_combined_dataset(
     telegram_frame = normalise_telegram_frame(telegram_raw)
     _write_canonical_frame(telegram_frame, target)
 
-    total_rows = twitter_rows + len(telegram_frame)
+    resolved_x_uri = x_mongo_uri or telegram_mongo_uri or _load_repo_telegram_defaults().get("mongo_uri")
+    x_frame = (
+        load_x_posts_from_mongo(resolved_x_uri, db_name=x_db_name)
+        if include_x_mongo and resolved_x_uri
+        else _empty_canonical_frame()
+    )
+    _write_canonical_frame(x_frame, target)
+
+    total_rows = twitter_rows + len(telegram_frame) + len(x_frame)
     return {
         "output_path": str(target),
         "twitter_input_path": str(twitter_path),
@@ -625,10 +703,16 @@ def build_combined_dataset(
         "twitter_rows": int(twitter_rows),
         "telegram_rows": int(len(telegram_frame)),
         "telegram_raw_rows": int(len(telegram_raw)),
+        "x_rows": int(len(x_frame)),
+        "x_topic_counts": {
+            str(key): int(value)
+            for key, value in x_frame["topic_label"].value_counts().to_dict().items()
+        } if not x_frame.empty else {},
         "total_rows": int(total_rows),
         "source_counts": {
             "twitter": int(twitter_rows),
             "telegram": int(len(telegram_frame)),
+            "x": int(len(x_frame)),
         },
     }
 

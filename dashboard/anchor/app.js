@@ -107,7 +107,31 @@ function newsForCluster(clusterId) {
   return state.news.find((n) => n.cluster_id === clusterId);
 }
 
-function updateLowerThird(seg) {
+function tickerTopicVi(topic) {
+  const key = (topic || "").toLowerCase();
+  if (key === "russia_ukraine_war") return "chi\u1ebfn s\u1ef1 Nga - Ukraine";
+  if (key === "us_iran_war") return "c\u0103ng th\u1eb3ng M\u1ef9 - Iran";
+  return "tin th\u1eddi s\u1ef1";
+}
+
+function tickerEntities(item) {
+  const entities = (item.entities || [])
+    .map((entity) => String(entity || "").replace(/^#/, "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return entities.length ? `, t\u00e2m \u0111i\u1ec3m: ${entities.join(", ")}` : "";
+}
+
+function legacyTickerLineForStory(seg, index) {
+  const item = newsForCluster(seg.cluster_id) || {};
+  const size = Number(item.cluster_size || 0);
+  const spread = size > 1
+    ? ` C\u1ee5m tin c\u00f3 ${size} b\u00e0i \u0111\u0103ng g\u1ea7n tr\u00f9ng l\u1eb7p.`
+    : " Tin m\u1edbi \u0111ang \u0111\u01b0\u1ee3c ghi nh\u1eadn trong d\u1eef li\u1ec7u h\u00f4m nay.";
+  return `TIN ${index}: C\u1eadp nh\u1eadt ${tickerTopicVi(item.topic)}${tickerEntities(item)}.${spread}`;
+}
+
+function legacyUpdateLowerThird(seg) {
   if (seg.kind === "story") {
     const n = newsForCluster(seg.cluster_id) || {};
     els.ltTopic.textContent = topicLabel(n.topic);
@@ -126,6 +150,39 @@ function updateLowerThird(seg) {
   }
 }
 
+function tickerLineForStory(seg, index) {
+  const item = newsForCluster(seg.cluster_id) || {};
+  const headline = String(item.headline || "").trim().replace(/\s+/g, " ");
+  const summary = String(item.summary || "").trim().replace(/\s+/g, " ");
+  const story = headline || summary;
+  if (story && /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i.test(story)) {
+    return `TIN ${index}: ${story.slice(0, 230)}`;
+  }
+  const size = Number(item.cluster_size || 0);
+  const spread = size > 1
+    ? ` C\u1ee5m tin c\u00f3 ${size} b\u00e0i \u0111\u0103ng g\u1ea7n tr\u00f9ng l\u1eb7p.`
+    : " Tin m\u1edbi \u0111ang \u0111\u01b0\u1ee3c ghi nh\u1eadn trong d\u1eef li\u1ec7u h\u00f4m nay.";
+  return `TIN ${index}: C\u1eadp nh\u1eadt ${tickerTopicVi(item.topic)}${tickerEntities(item)}.${spread}`;
+}
+
+function updateLowerThird(seg) {
+  if (seg.kind === "story") {
+    const n = newsForCluster(seg.cluster_id) || {};
+    const headline = String(n.headline || "").trim();
+    els.ltTopic.textContent = topicLabel(n.topic);
+    els.ltHeadline.textContent = headline || `Tin s\u1ed1 ${seg.cluster_id}`;
+    els.ltSub.textContent = "";
+  } else if (seg.kind === "intro") {
+    els.ltTopic.textContent = "B\u1ea2N TIN T\u1ed4NG H\u1ee2P";
+    els.ltHeadline.textContent = "\u0110i\u1ec3m tin n\u1ed5i b\u1eadt t\u1eeb m\u1ea1ng x\u00e3 h\u1ed9i";
+    els.ltSub.textContent = "Ph\u00e1t hi\u1ec7n c\u1ee5m tin b\u1eb1ng MinHash + LSH";
+  } else {
+    els.ltTopic.textContent = "K\u1ebeT TH\u00daC";
+    els.ltHeadline.textContent = "C\u1ea3m \u01a1n qu\u00fd v\u1ecb \u0111\u00e3 theo d\u00f5i";
+    els.ltSub.textContent = "";
+  }
+}
+
 function showImage(seg) {
   if (seg.image_path) {
     els.pipImg.style.backgroundImage = `url(${API_BASE}${seg.image_path})`;
@@ -136,10 +193,10 @@ function showImage(seg) {
 }
 
 function buildTicker() {
-  // Use the varied Vietnamese story sentences so the ticker isn't repetitive.
+  // Keep the ticker short, Vietnamese, and readable even when raw posts are English.
   const lines = state.segments
     .filter((s) => s.kind === "story")
-    .map((s, i) => `TIN ${i + 1}: ${s.text}`)
+    .map((s, i) => tickerLineForStory(s, i + 1))
     .filter(Boolean);
   if (lines.length) {
     els.tickerText.textContent = lines.join("       ◆       ") + "       ◆       ";
@@ -149,7 +206,9 @@ function buildTicker() {
 function buildPrepParams() {
   const topN = parseInt(els.topN.value, 10) || 5;
   const useLlm = els.useLlm.checked;
-  const images = els.genImages.checked;
+  // Do not generate images in the live path: it can take minutes and blocks playback.
+  // Cached images are still attached by the backend when they already exist.
+  const images = false;
   return new URLSearchParams({
     top_n: topN,
     use_llm: useLlm,
@@ -312,11 +371,11 @@ async function start() {
     await sleep(1500);
     els.introTitle.classList.remove("show");
 
-    // Phase 3: wait until prep (script + images + log) is fully done.
+    // Phase 3: wait until prep (script + cached audio) is fully done.
     els.prep.classList.add("show");
     els.prepText.textContent = check.cache && check.cache.hit
-      ? "Đang tải kịch bản và hình ảnh đã lưu..."
-      : "Đang tạo metadata kịch bản và hình ảnh lần đầu...";
+      ? "Đang tải kịch bản và âm thanh đã lưu..."
+      : "Đang tạo kịch bản và âm thanh bản tin...";
     const data = await dataPromise;
     els.prep.classList.remove("show");
     if (data && data.__error) throw data.__error;

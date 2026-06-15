@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from social_lsh.datasets import build_combined_dataset, export_telegram_dataset
+from social_lsh.datasets import build_combined_dataset, export_telegram_dataset, normalise_x_frame
 
 
 def _write_twitter_parquet(path: Path) -> None:
@@ -107,3 +107,34 @@ def test_build_combined_dataset_merges_twitter_and_telegram(tmp_path: Path) -> N
     assert metrics["total_rows"] == 3
     assert set(result["source"].tolist()) == {"twitter", "telegram"}
     assert {"tweet_id", "user_id", "text", "timestamp", "date"} <= set(result.columns)
+
+
+def test_normalise_x_frame_maps_post_to_canonical_schema() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "statusId": "2065841533828448348",
+                "account": "demo_account",
+                "postedAt": "2026-06-13T16:59:37Z",
+                "text": "  Russia Ukraine update  ",
+                "hasMedia": True,
+                "shouldKeep": True,
+                "llm": {"relevance_score": 0.95, "reason": "relevant"},
+            },
+            {
+                "statusId": "2",
+                "account": "filtered",
+                "postedAt": "2026-06-13T17:00:00Z",
+                "text": "filtered",
+                "shouldKeep": False,
+            },
+        ]
+    )
+
+    result = normalise_x_frame(frame, "russia_ukraine_war")
+
+    assert len(result) == 1
+    assert result.loc[0, "source"] == "x"
+    assert result.loc[0, "source_user_id"] == "demo_account"
+    assert result.loc[0, "topic_label"] == "russia_ukraine_war"
+    assert result.loc[0, "media_type"] == "media"

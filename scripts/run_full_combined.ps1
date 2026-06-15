@@ -1,6 +1,7 @@
 param(
     [string]$Python = "python",
     [string]$TelegramOutput = "jupyter\output\telegram_messages.parquet",
+    [string]$XOutput = "jupyter\output\x_messages.parquet",
     [string]$CombinedOutput = "jupyter\output\combined_social.parquet",
     [string]$ArtifactDir = "jupyter\output\lsh_combined",
     [int]$BaselineSize = 3000,
@@ -36,10 +37,15 @@ if (-not $SkipMongoExport) {
         "--output", $TelegramOutput,
         "--overwrite"
     )
+    Run-Step "Export X Mongo -> Parquet" @(
+        "scripts\data\export_x_dataset.py",
+        "--output", $XOutput,
+        "--overwrite"
+    )
 }
 
 if (-not $SkipMerge) {
-    Run-Step "Merge Twitter + Telegram -> Combined Parquet" @(
+    Run-Step "Merge Twitter + Telegram + X -> Combined Parquet" @(
         "scripts\data\build_combined_dataset.py",
         "--telegram-source", "mongo",
         "--output", $CombinedOutput,

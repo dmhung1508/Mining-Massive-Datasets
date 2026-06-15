@@ -50,6 +50,62 @@ python scripts/pipeline/run_lsh.py
 python scripts/pipeline/verify_and_cluster.py
 ```
 
+## Incremental Telegram/X updates
+
+Export fresh Mongo data and rebuild the canonical combined dataset:
+
+```powershell
+.\.venv-search\Scripts\python.exe scripts\data\export_telegram_dataset.py --source mongo --overwrite
+.\.venv-search\Scripts\python.exe scripts\data\export_x_dataset.py --overwrite
+.\.venv-search\Scripts\python.exe scripts\data\build_combined_dataset.py --telegram-source mongo --overwrite
+```
+
+Stop Streamlit/API, then add only unseen documents to the full search index:
+
+```powershell
+.\.venv-search\Scripts\python.exe scripts\pipeline\update_full_search_index.py `
+  --input jupyter/output/combined_social.parquet `
+  --artifact-dir jupyter/output/lsh_full `
+  --batch-size 5000
+```
+
+The updater is idempotent. It records short rejected posts, attaches exact/near
+duplicates to existing clusters, creates clusters for new content, and merges
+clusters when a new post connects them. It also refreshes the hourly cluster
+timeline and trending ranking.
+
+Refresh trending without importing new posts:
+
+```powershell
+.\.venv-search\Scripts\python.exe scripts\reporting\refresh_trending.py `
+  --artifact-dir jupyter/output/lsh_full `
+  --lookback-days 7 `
+  --recent-hours 24
+```
+
+Trending uses the latest timestamp in the dataset as its reference time. Its
+score combines recent post volume, growth, source/author diversity, recency,
+and a penalty when one author dominates a cluster.
+
+Generate a 10-item video-news brief from the top trending clusters:
+
+```powershell
+.\.venv-search\Scripts\python.exe scripts\reporting\generate_daily_news_brief.py `
+  --artifact-dir jupyter/output/lsh_full `
+  --output-dir jupyter/output/news_brief `
+  --limit 10 `
+  --min-posts 2
+```
+
+Outputs:
+
+- `jupyter/output/news_brief/daily_news_brief.json`
+- `jupyter/output/news_brief/daily_news_brief.md`
+
+The brief is extractive by default: it selects representative posts, metadata,
+timeline, and a voice-over draft for each trending cluster. Add an LLM step
+after this stage if you want more polished wording.
+
 ## Serve results
 
 FastAPI backend:

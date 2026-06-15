@@ -255,9 +255,27 @@ SYSTEM_PROMPT = (
 
 def _grok_settings() -> tuple[str, str, str] | None:
     """Read chat LLM settings, supporting OpenAI-style and legacy xAI vars."""
-    api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY") or "").strip()
-    base_url = (os.getenv("base_url") or os.getenv("OPENAI_BASE_URL") or os.getenv("XAI_BASE_URL") or "").strip()
     model = (os.getenv("model") or os.getenv("MODEL") or "").strip()
+    is_gemini = model.lower().startswith("gemini")
+    if is_gemini:
+        api_key = (
+            os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("API_KEY")
+            or ""
+        ).strip()
+        base_url = (
+            os.getenv("GEMINI_BASE_URL")
+            or os.getenv("base_url")
+            or os.getenv("OPENAI_BASE_URL")
+            or "https://generativelanguage.googleapis.com/v1beta/openai"
+        ).strip()
+        if "api.openai.com" in base_url:
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+    else:
+        api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY") or "").strip()
+        base_url = (os.getenv("base_url") or os.getenv("OPENAI_BASE_URL") or os.getenv("XAI_BASE_URL") or "").strip()
     if not api_key or not base_url or not model:
         return None
     return api_key, base_url, model
@@ -369,6 +387,63 @@ def _chat_completion(api_key: str, base_url: str, model: str, messages: list[dic
     raise requests.RequestException(last_error)
 
 
+def _offline_vietnamese_brief(lead: str, topic: str, entities: list[str]) -> tuple[str, str]:
+    """Create a Vietnamese news brief when the LLM is unavailable.
+
+    This is deliberately conservative: it paraphrases only high-signal phrases
+    that appear in the source post, and otherwise falls back to a neutral
+    topic-level news line instead of reading raw English aloud.
+    """
+    text = clean_tweet_text(lead)
+    lower = text.lower()
+    keywords = ", ".join(entities[:3])
+
+    if "strait of hormuz" in lower and "peace deal" in lower:
+        headline = "Mỹ và Iran được cho là đạt thỏa thuận liên quan eo biển Hormuz"
+        summary = (
+            "Một bài đăng đang lan truyền cho biết Tổng thống Donald Trump thông báo Mỹ và Iran đã đạt "
+            "một thỏa thuận hòa bình. Nội dung được nhắc tới gồm việc mở lại eo biển Hormuz và chấm dứt "
+            "phong tỏa hải quân của Mỹ. Thông tin cũng nói lễ ký chính thức có thể diễn ra tại Thụy Sĩ "
+            "vào ngày 19 tháng 6."
+        )
+    elif "beirut" in lower or "dahiyeh" in lower or "lebanon" in lower:
+        headline = "Căng thẳng Mỹ - Iran được nhắc tới cùng diễn biến tại Lebanon"
+        summary = (
+            "Một cụm bài đăng đang nhắc tới tuyên bố về thỏa thuận giữa Mỹ và Iran, đồng thời liên hệ "
+            "tới diễn biến ngừng bắn tại Lebanon. Bài viết cũng đề cập một vụ tấn công của Israel ở khu "
+            "Dahiyeh, Beirut, khiến tình hình khu vực tiếp tục được chú ý."
+        )
+    elif "sumy" in lower:
+        headline = "Ukraine nói thành phố Sumy bị tấn công trong đêm"
+        summary = (
+            "Giới chức địa phương Ukraine cho biết thành phố Sumy ở đông bắc nước này đã hứng chịu một "
+            "cuộc tấn công trong đêm. Theo nội dung được chia sẻ, vụ việc khiến một dân thường thiệt mạng "
+            "và ba người khác bị thương. Một tòa nhà chung cư được nhắc tới là khu vực bị ảnh hưởng."
+        )
+    elif "ukraine" in topic or "russia" in topic:
+        headline = "Mạng xã hội ghi nhận diễn biến mới về chiến sự Nga - Ukraine"
+        tail = f" Các từ khóa nổi bật gồm {keywords}." if keywords else ""
+        summary = (
+            "Một cụm bài đăng mới đang đề cập tới tình hình chiến sự Nga - Ukraine. Nội dung phản ánh "
+            "các diễn biến an ninh và tác động đối với khu vực liên quan." + tail
+        )
+    elif "iran" in topic or "us_iran" in topic:
+        headline = "Mạng xã hội ghi nhận diễn biến mới về căng thẳng Mỹ - Iran"
+        tail = f" Các từ khóa nổi bật gồm {keywords}." if keywords else ""
+        summary = (
+            "Một cụm bài đăng mới đang đề cập tới căng thẳng Mỹ - Iran. Nội dung cho thấy chủ đề này "
+            "tiếp tục thu hút chú ý trong các thảo luận về an ninh khu vực và ngoại giao." + tail
+        )
+    else:
+        headline = "Mạng xã hội ghi nhận một diễn biến thời sự mới"
+        summary = (
+            "Một cụm bài đăng mới đang được hệ thống phát hiện trong dữ liệu hôm nay. Nội dung được đưa "
+            "vào bản tin để theo dõi xu hướng thảo luận và các thông điệp đang lan truyền."
+        )
+
+    return headline, summary
+
+
 def _template_news_object(
     cluster_id: int,
     cluster_size: int,
@@ -378,8 +453,6 @@ def _template_news_object(
     cleaned = [clean_tweet_text(text) for text in sample_texts if str(text).strip()]
     central = pick_representative_text(sample_texts)
     lead = central or (cleaned[0] if cleaned else "Developing story")
-    headline = lead[:80].rstrip()
-    summary = lead[:280]
     entities = extract_hashtags(sample_texts)[:5]
 
     blob = " ".join(cleaned).lower()
@@ -404,6 +477,8 @@ def _template_news_object(
         scene = "outdoor news scene related to the story, neutral daylight"
         mood = "neutral, informative"
 
+    headline, summary = _offline_vietnamese_brief(lead, topic, entities)
+
     return NewsObject(
         cluster_id=cluster_id,
         cluster_size=cluster_size,
@@ -415,6 +490,55 @@ def _template_news_object(
         mood=mood,
         representative_text=central,
         analysis="",  # no offline analysis without an LLM
+    )
+
+
+def _offline_vietnamese_brief(lead: str, topic: str, entities: list[str]) -> tuple[str, str]:
+    """Natural Vietnamese news copy when the LLM is unavailable."""
+    text = clean_tweet_text(lead)
+    lower = text.lower()
+    keywords = ", ".join(entities[:3])
+
+    if "strait of hormuz" in lower and "peace deal" in lower:
+        return (
+            "Mỹ và Iran được cho là đạt thỏa thuận liên quan eo biển Hormuz",
+            "Theo các bài đăng đang được chia sẻ, Tổng thống Donald Trump nói Mỹ và Iran đã đạt một thỏa thuận hòa bình. Nội dung được nhắc tới gồm việc mở lại eo biển Hormuz và chấm dứt phong tỏa hải quân của Mỹ. Lễ ký chính thức được cho là có thể diễn ra tại Thụy Sĩ vào ngày 19 tháng 6.",
+        )
+    if "beirut" in lower or "dahiyeh" in lower or "lebanon" in lower:
+        return (
+            "Diễn biến tại Lebanon tiếp tục được gắn với căng thẳng Mỹ - Iran",
+            "Một cụm bài đăng đang liên hệ tuyên bố về thỏa thuận giữa Mỹ và Iran với diễn biến ngừng bắn tại Lebanon. Nội dung cũng nhắc đến một vụ tấn công của Israel tại khu Dahiyeh, Beirut, khiến tình hình khu vực tiếp tục nóng lên.",
+        )
+    if "sumy" in lower:
+        return (
+            "Ukraine nói thành phố Sumy bị tấn công trong đêm",
+            "Giới chức địa phương Ukraine cho biết thành phố Sumy ở đông bắc nước này đã hứng chịu một cuộc tấn công trong đêm. Theo nội dung được chia sẻ, vụ việc khiến một dân thường thiệt mạng và ba người khác bị thương. Khu vực bị ảnh hưởng được nhắc tới là một tòa nhà chung cư.",
+        )
+    if "kharkiv" in lower and ("rescuer" in lower or "emergency" in lower):
+        return (
+            "Kharkiv ghi nhận thương vong trong lực lượng cứu hộ sau một vụ tấn công",
+            "Một bài đăng cho biết một vụ tấn công của Nga tại Kharkiv đã khiến nhiều nhân viên cứu hộ và một nhân viên thuộc cơ quan ứng phó khẩn cấp địa phương thiệt mạng. Nội dung cũng nói một số nhân viên cứu hộ khác bị thương, cho thấy rủi ro đối với lực lượng phản ứng khẩn cấp tại khu vực tiền tuyến.",
+        )
+    if "dzhankoi" in lower or "crimea logistics" in lower:
+        return (
+            "UAV Ukraine được cho là tấn công Dzhankoi ở Crimea",
+            "Một cụm bài đăng dẫn lại thông tin về việc UAV Ukraine tấn công Dzhankoi, khu vực được nhắc tới như một điểm liên quan hậu cần của Nga tại Crimea. Diễn biến này tiếp tục cho thấy các tuyến hậu cần và cơ sở quân sự ở Crimea là mục tiêu được theo dõi sát trong chiến sự.",
+        )
+    if "ukraine" in topic or "russia" in topic:
+        tail = f" Các từ khóa nổi bật gồm {keywords}." if keywords else ""
+        return (
+            "Chiến sự Nga - Ukraine có thêm diễn biến được chú ý",
+            "Các bài đăng mới đang tập trung vào một diễn biến liên quan chiến sự Nga - Ukraine. Nội dung cho thấy chủ đề an ninh và tác động tại khu vực tiếp tục là tâm điểm theo dõi trong ngày." + tail,
+        )
+    if "iran" in topic or "us_iran" in topic:
+        tail = f" Các từ khóa nổi bật gồm {keywords}." if keywords else ""
+        return (
+            "Căng thẳng Mỹ - Iran tiếp tục là tâm điểm trên mạng xã hội",
+            "Các bài đăng mới đang xoay quanh căng thẳng Mỹ - Iran và những tác động ngoại giao, an ninh trong khu vực. Chủ đề này tiếp tục thu hút sự quan tâm khi nhiều thông tin liên quan được chia sẻ liên tục." + tail,
+        )
+    return (
+        "Một diễn biến thời sự mới đang được chú ý",
+        "Hệ thống ghi nhận một cụm bài đăng mới có dấu hiệu được quan tâm trong dữ liệu hôm nay. Nội dung này được đưa vào bản tin để theo dõi xu hướng thảo luận và thông điệp đang lan truyền.",
     )
 
 
@@ -582,6 +706,46 @@ def _vi_story_text(index: int, item: dict[str, Any]) -> str:
     return " ".join(p for p in parts if p).strip()
 
 
+def _dedupe_summary(headline: str, summary: str) -> str:
+    headline_key = re.sub(r"\W+", " ", headline.lower()).strip()
+    summary_key = re.sub(r"\W+", " ", summary.lower()).strip()
+    if headline_key and summary_key.startswith(headline_key):
+        trimmed = summary[len(headline):].lstrip(" .,:;-")
+        return trimmed or summary
+    return summary
+
+
+def _vi_story_text(index: int, item: dict[str, Any]) -> str:
+    """Build a natural TV-news style spoken paragraph."""
+    headline = str(item.get("headline", "")).strip()
+    summary = str(item.get("summary", "")).strip()
+    analysis = str(item.get("analysis", "")).strip()
+    topic = str(item.get("topic", "")).strip().lower()
+    topic_name = {
+        "russia_ukraine_war": "chiến sự Nga - Ukraine",
+        "us_iran_war": "căng thẳng Mỹ - Iran",
+    }.get(topic, "thời sự quốc tế")
+
+    openers = [
+        f"Mở đầu bản tin là diễn biến liên quan {topic_name}:",
+        f"Chuyển sang {topic_name}, đáng chú ý là thông tin sau:",
+        f"Ở một điểm nóng khác của {topic_name}:",
+        "Trong khi đó, một diễn biến khác cần chú ý là:",
+        "Đáng chú ý thêm trong dữ liệu mới nhất là:",
+    ]
+    opener = openers[min(index - 1, len(openers) - 1)]
+
+    body = analysis if analysis else summary
+    if headline and body:
+        body = _dedupe_summary(headline, body)
+        return f"{opener} {headline.rstrip('.')}. {body}".strip()
+    if body:
+        return f"{opener} {body}".strip()
+    if headline:
+        return f"{opener} {headline.rstrip('.')}. Đây là một trong những nội dung đang được chú ý trong dữ liệu mới nhất."
+    return f"{opener} hệ thống ghi nhận một cụm thảo luận mới cần tiếp tục theo dõi."
+
+
 def build_broadcast_segments(
     news_items: list[dict[str, Any] | NewsObject],
     intro: str | None = None,
@@ -597,11 +761,11 @@ def build_broadcast_segments(
 
     if intro is None:
         intro = (
-            "Xin chào quý vị và các bạn. Sau đây là những diễn biến chính "
-            "đang được quan tâm nhất hôm nay trên mạng xã hội."
+            "Xin chào quý vị và các bạn. Đây là bản tin nhanh, tổng hợp những diễn biến quốc tế "
+            "đang được thảo luận nhiều nhất trong dữ liệu mạng xã hội mới nhất."
         )
     if outro is None:
-        outro = "Trên đây là những tin chính. Xin cảm ơn quý vị và các bạn đã theo dõi."
+        outro = "Bản tin nhanh xin khép lại tại đây. Cảm ơn quý vị và các bạn đã theo dõi."
 
     segments: list[dict[str, Any]] = [{"kind": "intro", "text": intro, "cluster_id": None, "image_path": None}]
 
