@@ -150,7 +150,14 @@ function buildPrepParams() {
   const topN = parseInt(els.topN.value, 10) || 5;
   const useLlm = els.useLlm.checked;
   const images = els.genImages.checked;
-  return new URLSearchParams({ top_n: topN, use_llm: useLlm, images });
+  return new URLSearchParams({
+    top_n: topN,
+    use_llm: useLlm,
+    images,
+    audio: true,
+    source: "auto",
+    force: false,
+  });
 }
 
 function preflightSummary(check) {
@@ -193,6 +200,13 @@ async function synthesize(text) {
   if (!res.ok) throw new Error(`tts failed (${res.status})`);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
+}
+
+async function audioForSegment(seg) {
+  if (seg.audio_path) {
+    return `${API_BASE}${seg.audio_path}`;
+  }
+  return synthesize(seg.text);
 }
 
 function speakWithLipSync(audioUrl) {
@@ -243,7 +257,7 @@ function speakWithLipSync(audioUrl) {
 
 async function playLoop() {
   // Prefetch the first segment's audio.
-  let nextAudio = state.segments.length ? synthesize(state.segments[0].text).catch(() => null) : null;
+  let nextAudio = state.segments.length ? audioForSegment(state.segments[0]).catch(() => null) : null;
 
   for (; state.index < state.segments.length; state.index++) {
     if (!state.playing) break;
@@ -255,7 +269,7 @@ async function playLoop() {
     const url = await nextAudio;
     // Start fetching the NEXT segment's audio while this one plays (no gap).
     const upcoming = state.segments[state.index + 1];
-    nextAudio = upcoming ? synthesize(upcoming.text).catch(() => null) : null;
+    nextAudio = upcoming ? audioForSegment(upcoming).catch(() => null) : null;
 
     if (!url) {
       setStatus(`Bỏ qua đoạn ${state.index + 1} (lỗi tạo tiếng).`);

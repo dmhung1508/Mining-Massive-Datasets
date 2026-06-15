@@ -510,6 +510,78 @@ def _vi_story_text(index: int, item: dict[str, Any]) -> str:
     return " ".join(p for p in parts if p).strip()
 
 
+def _clip_for_speech(text: str, limit: int = 360) -> str:
+    text = clean_tweet_text(text)
+    text = _soften_sensitive_text(text)
+    text = re.sub(r"\b(read more|breaking|update)\b[:：]?", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"[^\w\s.,;:'\"!?()/-]", " ", text)
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:")
+    return clipped + "..."
+
+
+def _source_story_text(item: dict[str, Any]) -> str:
+    """Return concrete story content from the cluster, not a generic topic line."""
+    candidates = [
+        str(item.get("summary", "")).strip(),
+        str(item.get("headline", "")).strip(),
+        str(item.get("representative_text", "")).strip(),
+    ]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        value = _clip_for_speech(candidate)
+        key = value.lower()
+        if any(key.startswith(existing.lower()) or existing.lower().startswith(key) for existing in cleaned):
+            continue
+        if value and key not in seen:
+            cleaned.append(value)
+            seen.add(key)
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    return f"{cleaned[0]} Chi tiết thêm: {cleaned[1]}"
+
+
+def _vi_story_text(index: int, item: dict[str, Any]) -> str:
+    """Build a news-style spoken paragraph that keeps the real story content."""
+    headline = str(item.get("headline", "")).strip()
+    summary = str(item.get("summary", "")).strip()
+    analysis = str(item.get("analysis", "")).strip()
+    topic_vi = _vi_topic(str(item.get("topic", "")))
+    entities = [e for e in (item.get("entities") or []) if str(e).strip()]
+
+    openers = [
+        "Tin thứ nhất" if index == 1 else f"Tin thứ {index}",
+        "Đáng chú ý",
+        "Cập nhật mới nhất",
+        "Trong một diễn biến khác",
+        "Bên cạnh đó",
+    ]
+    lead = openers[min(index - 1, len(openers) - 1)] + "."
+
+    if analysis and _is_vietnamese(analysis):
+        head = headline if _is_vietnamese(headline) else ""
+        parts = [lead, (head.rstrip(".") + "." if head else ""), analysis]
+    elif _is_vietnamese(headline) or _is_vietnamese(summary):
+        body = headline or summary
+        detail = summary if summary and summary != headline else ""
+        parts = [lead, body.rstrip(".") + ".", detail]
+    else:
+        story = _source_story_text(item)
+        if story:
+            parts = [lead, f"Nội dung chính về {topic_vi}: {story}"]
+        else:
+            kw = ", ".join(entities[:4])
+            tail = f", với các từ khóa {kw}" if kw else ""
+            parts = [lead, f"Có một diễn biến mới về {topic_vi}{tail}."]
+
+    return " ".join(p for p in parts if p).strip()
+
+
 def build_broadcast_segments(
     news_items: list[dict[str, Any] | NewsObject],
     intro: str | None = None,
