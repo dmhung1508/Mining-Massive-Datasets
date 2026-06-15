@@ -12,10 +12,11 @@ fallback keeps the pipeline working offline.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -23,6 +24,20 @@ import requests
 URL_RE = re.compile(r"https?://\S+")
 HASHTAG_RE = re.compile(r"#(\w+)")
 MENTION_RE = re.compile(r"@\w+")
+
+# Where to log every LLM request/response. Override with SOCIAL_LSH_LOG.
+LLM_LOG_PATH = os.getenv("SOCIAL_LSH_LOG", str(Path(__file__).resolve().parents[2] / "log.txt"))
+
+
+def _log_llm(section: str, content: str) -> None:
+    """Append an LLM interaction to the log file (best-effort, never raises)."""
+    try:
+        with open(LLM_LOG_PATH, "a", encoding="utf-8") as handle:
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            handle.write(f"\n===== {stamp} | {section} =====\n")
+            handle.write(content.rstrip() + "\n")
+    except OSError:
+        pass
 
 
 @dataclass
@@ -35,6 +50,8 @@ class NewsObject:
     entities: list[str] = field(default_factory=list)
     scene: str = ""
     mood: str = ""
+    representative_text: str = ""
+    analysis: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +63,8 @@ class NewsObject:
             "entities": self.entities,
             "scene": self.scene,
             "mood": self.mood,
+            "representative_text": self.representative_text,
+            "analysis": self.analysis,
         }
 
 
@@ -65,6 +84,41 @@ def extract_hashtags(texts: list[str]) -> list[str]:
             if tag_lower not in {item.lower() for item in seen}:
                 seen.append(tag)
     return seen
+
+
+def _tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def pick_representative_text(sample_texts: list[str]) -> str:
+    """Pick the central post of a cluster (the medoid by word overlap).
+
+    The representative is the post that shares the most vocabulary with the
+    others, i.e. the one that best captures what the whole cluster is about.
+    Falls back to the longest cleaned post when there are too few samples.
+    """
+    cleaned = [clean_tweet_text(t) for t in sample_texts if str(t).strip()]
+    cleaned = [c for c in cleaned if len(c) >= 10]
+    if not cleaned:
+        return ""
+    if len(cleaned) <= 2:
+        return max(cleaned, key=len)
+
+    token_sets = [_tokens(c) for c in cleaned]
+    best_idx, best_score = 0, -1.0
+    for i, ti in enumerate(token_sets):
+        if not ti:
+            continue
+        score = 0.0
+        for j, tj in enumerate(token_sets):
+            if i == j or not tj:
+                continue
+            inter = len(ti & tj)
+            union = len(ti | tj)
+            score += inter / union if union else 0.0
+        if score > best_score:
+            best_idx, best_score = i, score
+    return cleaned[best_idx]
 
 
 # Hashtags/words that mislead the image model away from the real story.
@@ -188,25 +242,45 @@ def build_image_prompt(news: "NewsObject") -> str:
     return ". ".join(parts)
 
 
-# --- LLM (Grok) summarisation ---------------------------------------------
+# --- LLM (Grok) analysis: RAG-style, plain-text output ---------------------
 
 SYSTEM_PROMPT = (
-    "You are a news editor. You receive several near-duplicate social media posts "
-    "that form one news cluster. Summarise them into a single neutral news item. "
-    "Respond ONLY with compact JSON having keys: headline, summary, topic, entities, "
-    "scene, mood. 'scene' must be an English VISUAL description for a video generator "
-    "(places, objects, weather, time of day) and must NOT include real named people's "
-    "faces. 'mood' is 2-3 English adjectives. 'entities' is a list of place/org names."
+    "Bạn là phát thanh viên thời sự. Dựa trên các bài đăng được cung cấp (cùng nói về "
+    "một sự việc), hãy viết MỘT đoạn dẫn bản tin bằng tiếng Việt, văn phong trang trọng, "
+    "trung lập, mạch lạc, khoảng 4 đến 6 câu. Nêu diễn biến chính, bối cảnh, các bên liên "
+    "quan và vì sao đáng chú ý. Chỉ trả lời bằng đoạn văn thuần, KHÔNG dùng JSON, KHÔNG "
+    "markdown, KHÔNG tiêu đề, KHÔNG gạch đầu dòng."
 )
 
 
 def _grok_settings() -> tuple[str, str, str] | None:
-    api_key = (os.getenv("API_KEY") or "").strip()
-    base_url = (os.getenv("XAI_BASE_URL") or "").strip()
-    model = (os.getenv("MODEL") or "").strip()
+    """Read chat LLM settings, supporting OpenAI-style and legacy xAI vars."""
+    api_key = (os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY") or "").strip()
+    base_url = (os.getenv("base_url") or os.getenv("OPENAI_BASE_URL") or os.getenv("XAI_BASE_URL") or "").strip()
+    model = (os.getenv("model") or os.getenv("MODEL") or "").strip()
     if not api_key or not base_url or not model:
         return None
     return api_key, base_url, model
+
+
+def _infer_topic(text: str) -> str:
+    blob = text.lower()
+    if any(k in blob for k in ("ukrain", "russia", "putin", "kyiv", "kiev", "bakhmut", "kremlin", "zelensky", "moscow")):
+        return "russia_ukraine_war"
+    if any(k in blob for k in ("iran", "tehran", "hormuz", "us-iran", "iranian")):
+        return "us_iran_war"
+    return "unknown"
+
+
+def _scene_for_topic(topic: str) -> tuple[str, str]:
+    if "russia" in topic or "ukraine" in topic:
+        return (
+            "war-affected Eastern European town, distant smoke, overcast sky, empty streets, military vehicles",
+            "tense, somber",
+        )
+    if "iran" in topic or "us_iran" in topic:
+        return ("middle eastern city skyline at dusk, news helicopter view, hazy light", "uneasy, urgent")
+    return ("outdoor news scene related to the story, neutral daylight", "neutral, informative")
 
 
 def _summarise_with_grok(
@@ -214,6 +288,8 @@ def _summarise_with_grok(
     cluster_size: int,
     sample_texts: list[str],
     language: str,
+    representative_text: str = "",
+    max_posts: int = 12,
 ) -> NewsObject | None:
     settings = _grok_settings()
     if settings is None:
@@ -221,63 +297,76 @@ def _summarise_with_grok(
     api_key, base_url, model = settings
 
     cleaned = [clean_tweet_text(text) for text in sample_texts if str(text).strip()]
-    if not cleaned:
+    central = representative_text or (pick_representative_text(sample_texts))
+    if not central:
         return None
 
+    # RAG-style: provide the related posts as context, ask for a plain paragraph.
+    context_posts = [central] + [c for c in cleaned if c != central][: max(0, max_posts - 1)]
+    context_block = "\n".join(f"- {p}" for p in context_posts)
     user_prompt = (
-        f"Language for headline and summary: {language}.\n"
-        f"Posts in this cluster:\n- " + "\n- ".join(cleaned[:6])
+        "Các bài đăng cùng nói về một sự việc:\n"
+        f"{context_block}\n\n"
+        "Hãy viết đoạn dẫn bản tin tiếng Việt cho sự việc trên."
     )
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.4,
-    }
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
     try:
-        response = requests.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=60,
+        _log_llm(
+            f"INPUT cluster_id={cluster_id} size={cluster_size} model={model} posts={len(context_posts)}",
+            f"[SYSTEM]\n{SYSTEM_PROMPT}\n\n[USER]\n{user_prompt}",
         )
-        response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        parsed = _parse_json_object(content)
-        if parsed is None:
+        analysis = _chat_completion(api_key, base_url, model, messages, max_tokens=600)
+        _log_llm(f"OUTPUT cluster_id={cluster_id}", analysis)
+        if not analysis:
             return None
+
+        # Derive the rest locally so we don't pay the LLM for extra fields.
+        topic = _infer_topic(central + " " + " ".join(cleaned[:5]))
+        scene, mood = _scene_for_topic(topic)
+        headline = analysis.split(".")[0].strip()[:90]
         return NewsObject(
             cluster_id=cluster_id,
             cluster_size=cluster_size,
-            headline=str(parsed.get("headline", "")).strip(),
-            summary=str(parsed.get("summary", "")).strip(),
-            topic=str(parsed.get("topic", "")).strip() or "unknown",
-            entities=[str(item).strip() for item in parsed.get("entities", []) if str(item).strip()],
-            scene=str(parsed.get("scene", "")).strip(),
-            mood=str(parsed.get("mood", "")).strip(),
+            headline=headline,
+            summary=analysis,
+            topic=topic,
+            entities=extract_hashtags(sample_texts)[:5],
+            scene=scene,
+            mood=mood,
+            representative_text=central,
+            analysis=analysis,
         )
-    except (requests.RequestException, KeyError, ValueError):
+    except (requests.RequestException, KeyError, ValueError) as exc:
+        _log_llm(f"ERROR cluster_id={cluster_id}", f"{type(exc).__name__}: {exc}")
         return None
 
 
-def _parse_json_object(content: str) -> dict[str, Any] | None:
-    content = content.strip()
-    # Strip ```json fences if present.
-    if content.startswith("```"):
-        content = re.sub(r"^```[a-zA-Z]*\n?", "", content)
-        content = re.sub(r"\n?```$", "", content)
-    try:
-        return json.loads(content)
-    except ValueError:
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except ValueError:
-                return None
-    return None
+def _chat_completion(api_key: str, base_url: str, model: str, messages: list[dict], max_tokens: int = 600) -> str:
+    """Call an OpenAI-compatible chat endpoint, tolerant to parameter differences.
+
+    Newer OpenAI models (gpt-5.x) require `max_completion_tokens` and only accept
+    the default temperature, while older/3rd-party endpoints use `max_tokens`.
+    We try the modern form first, then fall back.
+    """
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    base_payload = {"model": model, "messages": messages}
+
+    attempts = [
+        {**base_payload, "max_completion_tokens": max_tokens},
+        {**base_payload, "max_tokens": max_tokens, "temperature": 0.5},
+        {**base_payload},
+    ]
+    last_error = ""
+    for payload in attempts:
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        if resp.status_code == 200:
+            return str(resp.json()["choices"][0]["message"]["content"]).strip()
+        last_error = f"{resp.status_code}: {resp.text[:160]}"
+    raise requests.RequestException(last_error)
 
 
 def _template_news_object(
@@ -287,9 +376,10 @@ def _template_news_object(
     topic_label: str | None,
 ) -> NewsObject:
     cleaned = [clean_tweet_text(text) for text in sample_texts if str(text).strip()]
-    lead = cleaned[0] if cleaned else "Developing story"
+    central = pick_representative_text(sample_texts)
+    lead = central or (cleaned[0] if cleaned else "Developing story")
     headline = lead[:80].rstrip()
-    summary = " ".join(cleaned[:2])[:280]
+    summary = lead[:280]
     entities = extract_hashtags(sample_texts)[:5]
 
     blob = " ".join(cleaned).lower()
@@ -323,6 +413,8 @@ def _template_news_object(
         entities=entities,
         scene=scene,
         mood=mood,
+        representative_text=central,
+        analysis="",  # no offline analysis without an LLM
     )
 
 
@@ -333,10 +425,24 @@ def build_news_object(
     topic_label: str | None = None,
     language: str = "Vietnamese",
     use_llm: bool = True,
+    max_posts: int = 12,
 ) -> NewsObject:
-    """Build one news object for a cluster, preferring Grok and falling back to a template."""
+    """Build one news object for a cluster, preferring Grok and falling back to a template.
+
+    The cluster's central (representative) post is selected first, then the LLM
+    analyses it together with up to `max_posts` related posts from the cluster
+    into a richer Vietnamese broadcast segment.
+    """
+    representative = pick_representative_text(sample_texts)
     if use_llm:
-        news = _summarise_with_grok(cluster_id, cluster_size, sample_texts, language)
+        news = _summarise_with_grok(
+            cluster_id,
+            cluster_size,
+            sample_texts,
+            language,
+            representative_text=representative,
+            max_posts=max_posts,
+        )
         if news is not None and news.scene:
             return news
     return _template_news_object(cluster_id, cluster_size, sample_texts, topic_label)
@@ -368,35 +474,40 @@ def _is_vietnamese(text: str) -> bool:
 def _vi_story_text(index: int, item: dict[str, Any]) -> str:
     """Build a fully Vietnamese spoken paragraph for one cluster.
 
-    If the headline/summary is already Vietnamese (e.g. Grok wrote it), read it.
-    Otherwise describe the cluster in Vietnamese from topic + key entities, so
-    the anchor never reads raw English tweets aloud.
+    Reads only the news content (no technical stats like cluster size).
+
+    Priority:
+    1. LLM `analysis` of the central post (the real news content).
+    2. Vietnamese headline/summary if available.
+    3. A short Vietnamese line from topic + keywords as a last resort.
     """
     headline = str(item.get("headline", "")).strip()
     summary = str(item.get("summary", "")).strip()
+    analysis = str(item.get("analysis", "")).strip()
     topic_vi = _vi_topic(str(item.get("topic", "")))
-    size = item.get("cluster_size")
     entities = [e for e in (item.get("entities") or []) if str(e).strip()]
 
-    lead = f"Tin thứ {index}, liên quan đến {topic_vi}."
+    # Vary the opener so consecutive stories don't sound identical.
+    openers = ["Tiếp theo", "Đáng chú ý", "Trong một diễn biến khác", "Bên cạnh đó", "Một tin khác"]
+    lead = "Tin nổi bật đầu tiên." if index == 1 else f"{openers[(index - 1) % len(openers)]}."
 
-    if _is_vietnamese(headline) or _is_vietnamese(summary):
+    if analysis and _is_vietnamese(analysis):
+        head = headline if _is_vietnamese(headline) else ""
+        parts = [lead, (head.rstrip(".") + "." if head else ""), analysis]
+    elif _is_vietnamese(headline) or _is_vietnamese(summary):
         body = headline or summary
         detail = summary if summary and summary != headline else ""
         parts = [lead, body.rstrip(".") + ".", detail]
     else:
-        # English-only source: describe in Vietnamese using keywords.
+        # English-only source with no LLM: a concise Vietnamese line about the topic.
         if entities:
             kw = ", ".join(entities[:4])
-            body = f"Nhiều bài đăng đang lan truyền về chủ đề này, với các từ khóa nổi bật như {kw}."
+            body = f"Mạng xã hội đang chú ý đến diễn biến {topic_vi}, nổi bật quanh {kw}."
         else:
-            body = "Nhiều bài đăng tương tự đang lan truyền trên mạng xã hội về chủ đề này."
+            body = f"Mạng xã hội đang chú ý đến một diễn biến mới liên quan đến {topic_vi}."
         parts = [lead, body]
 
-    spoken = " ".join(p for p in parts if p).strip()
-    if size:
-        spoken += f" Hệ thống ghi nhận khoảng {int(size)} bài đăng gần như trùng lặp trong cụm này."
-    return spoken
+    return " ".join(p for p in parts if p).strip()
 
 
 def build_broadcast_segments(
@@ -414,11 +525,11 @@ def build_broadcast_segments(
 
     if intro is None:
         intro = (
-            "Xin chào quý vị và các bạn. Đây là bản tin tổng hợp tự động "
-            f"từ mạng xã hội, với {len(items)} câu chuyện nổi bật trong hôm nay."
+            "Xin chào quý vị và các bạn. Sau đây là những diễn biến chính "
+            "đang được quan tâm nhất hôm nay trên mạng xã hội."
         )
     if outro is None:
-        outro = "Bản tin tổng hợp đến đây là kết thúc. Xin cảm ơn quý vị và các bạn đã theo dõi."
+        outro = "Trên đây là những tin chính. Xin cảm ơn quý vị và các bạn đã theo dõi."
 
     segments: list[dict[str, Any]] = [{"kind": "intro", "text": intro, "cluster_id": None, "image_path": None}]
 

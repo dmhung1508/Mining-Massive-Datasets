@@ -5,6 +5,7 @@ import json
 import runpy
 import shutil
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -257,6 +258,120 @@ def _topic_reason_from_classification(value: object) -> str | None:
     return reason or None
 
 
+def _first_present(row: dict[str, Any], keys: list[str]) -> Any:
+    """Return the first non-empty value among candidate keys (supports nesting)."""
+    for key in keys:
+        if "." in key:
+            cur: Any = row
+            for part in key.split("."):
+                cur = _nested_value(cur, part) if isinstance(cur, dict) else None
+                if cur is None:
+                    break
+            value = cur
+        else:
+            value = row.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+# Field names for X posts in the news_monitoring MongoDB (confirmed from schema):
+#   statusId, postedAt, account, monitorTopic, source, hash, url, hasMedia, media
+# The post body field is not always visible in the sample, so `text` probes
+# several likely keys.
+_X_FIELD_CANDIDATES = {
+    "id": ["statusId", "status_id", "tweet_id", "tweetid", "id_str", "id", "post_id"],
+    "text": ["text", "content", "full_text", "tweet", "body", "postText", "rawText", "caption", "title"],
+    "timestamp": ["postedAt", "crawledAt", "firstSeenAt", "created_at", "timestamp", "tweetcreatedts", "date"],
+    "user_id": ["account", "user_id", "userid", "author_id", "username", "screen_name"],
+    "username": ["account", "username", "screen_name", "author"],
+    "url": ["url", "link", "permalink"],
+}
+
+# monitorTopic value on each document -> canonical topic label.
+_X_MONITOR_TOPIC_MAP = {
+    "russia_ukraine": "russia_ukraine_war",
+    "russia_ukraina": "russia_ukraine_war",
+    "ukraine_russia": "russia_ukraine_war",
+    "us_iran": "us_iran_war",
+    "iran_us": "us_iran_war",
+}
+
+
+def _x_topic_from_row(row: dict[str, Any], fallback: str | None) -> str | None:
+    monitor = row.get("monitorTopic")
+    if monitor:
+        key = str(monitor).strip().lower()
+        mapped = _X_MONITOR_TOPIC_MAP.get(key)
+        if mapped:
+            return mapped
+        # Heuristic for unseen values.
+        if "ukrain" in key or "russia" in key:
+            return "russia_ukraine_war"
+        if "iran" in key:
+            return "us_iran_war"
+    return (fallback or "").strip().lower() or None
+
+
+def normalise_x_frame(frame: pd.DataFrame, topic_label: str | None = None) -> pd.DataFrame:
+    """Normalise X posts (from the news_monitoring MongoDB) into the canonical schema.
+
+    The per-document `monitorTopic` field drives the topic label; `topic_label`
+    is only used as a fallback when `monitorTopic` is missing.
+    """
+    if frame.empty:
+        return _empty_canonical_frame()
+
+    records = frame.to_dict(orient="records")
+    rows: list[dict[str, Any]] = []
+    for row in records:
+        raw_text = _first_present(row, _X_FIELD_CANDIDATES["text"])
+        text = _collapse_text(raw_text)
+        if not text:
+            continue
+
+        raw_ts = _first_present(row, _X_FIELD_CANDIDATES["timestamp"])
+        timestamp = pd.to_datetime(raw_ts, utc=True, errors="coerce")
+        if pd.isna(timestamp):
+            continue
+        timestamp = timestamp.tz_localize(None) if timestamp.tzinfo else timestamp
+
+        raw_id = _first_present(row, _X_FIELD_CANDIDATES["id"])
+        source_item_id = str(raw_id) if raw_id is not None else _stable_text_id(text + str(raw_ts))
+        raw_user = _first_present(row, _X_FIELD_CANDIDATES["user_id"])
+        source_user_id = str(raw_user) if raw_user is not None else "unknown"
+
+        rows.append(
+            {
+                "tweet_id": _stable_positive_int64(f"x:{source_item_id}"),
+                "user_id": _stable_positive_int64(f"x-user:{source_user_id}"),
+                "text": text,
+                "timestamp": timestamp,
+                "date": timestamp.strftime("%Y-%m-%d"),
+                "source": "x",
+                "source_item_id": source_item_id,
+                "source_user_id": source_user_id,
+                "source_channel_id": None,
+                "media_type": None,
+                "forward_from_user_id": None,
+                "forward_from_username": None,
+                "topic_label": _x_topic_from_row(row, topic_label),
+                "topic_confidence": None,
+                "topic_reason": None,
+            }
+        )
+
+    if not rows:
+        return _empty_canonical_frame()
+    return pd.DataFrame(rows)[CANONICAL_COLUMNS].reset_index(drop=True)
+
+
+def _stable_text_id(value: str) -> str:
+    return hashlib.blake2b(value.encode("utf-8"), digest_size=8).hexdigest()
+
+
+
+
 def normalise_telegram_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return _empty_canonical_frame()
@@ -328,6 +443,53 @@ def load_telegram_messages_from_mongo(
     finally:
         client.close()
     return pd.DataFrame(rows)
+
+
+def load_mongo_collection(
+    mongo_uri: str,
+    db_name: str,
+    collection_name: str,
+    since: "datetime | None" = None,
+    timestamp_fields: list[str] | None = None,
+    limit: int | None = None,
+) -> pd.DataFrame:
+    """Load a MongoDB collection, optionally only documents newer than `since`.
+
+    Because timestamp field names vary, when `since` is given we fetch and
+    filter in Python against several candidate timestamp fields rather than
+    relying on a single indexed field.
+    """
+    try:
+        from pymongo import MongoClient
+    except ImportError as exc:
+        raise RuntimeError("pymongo is required to read data from MongoDB") from exc
+
+    client = MongoClient(mongo_uri, serverSelectionTimeoutMS=8000)
+    try:
+        client.admin.command("ping")
+        cursor = client[db_name][collection_name].find({}, {"_id": 0})
+        if limit:
+            cursor = cursor.limit(int(limit))
+        rows = list(cursor)
+    finally:
+        client.close()
+
+    frame = pd.DataFrame(rows)
+    if frame.empty or since is None:
+        return frame
+
+    fields = timestamp_fields or _X_FIELD_CANDIDATES["timestamp"]
+    present = [f for f in fields if f in frame.columns]
+    if not present:
+        return frame
+    parsed = None
+    for field in present:
+        col = pd.to_datetime(frame[field], utc=True, errors="coerce")
+        parsed = col if parsed is None else parsed.fillna(col)
+    since_ts = pd.Timestamp(since)
+    if since_ts.tzinfo is None:
+        since_ts = since_ts.tz_localize("UTC")
+    return frame.loc[parsed.notna() & (parsed >= since_ts)].reset_index(drop=True)
 
 
 def load_telegram_messages_from_jsonl(local_data_dir: Path | str) -> pd.DataFrame:
@@ -467,5 +629,112 @@ def build_combined_dataset(
         "source_counts": {
             "twitter": int(twitter_rows),
             "telegram": int(len(telegram_frame)),
+        },
+    }
+
+
+# X (Twitter) collections in the news_monitoring database, mapped to topics.
+# The per-document monitorTopic field is authoritative; this is the fallback.
+DEFAULT_X_COLLECTIONS = {
+    "x_russia_ukraine_posts": "russia_ukraine_war",
+    "x_us_iran_posts": "us_iran_war",
+}
+
+
+def build_recent_window_dataset(
+    output_path: Path | str,
+    since_days: float = 2.0,
+    mongo_uri: str | None = None,
+    news_mongo_uri: str | None = None,
+    news_db_name: str | None = None,
+    x_collections: dict[str, str] | None = None,
+    telegram_db_name: str | None = None,
+    telegram_collection_name: str | None = None,
+    telegram_local_data_dir: Path | str | None = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Build a canonical parquet of only the most recent posts across sources.
+
+    This powers the "latest clusters" flow: instead of re-clustering the full
+    historical corpus (see lsh_full), pull a recent time window from Telegram +
+    X and run the lightweight LSH pipeline on just that window.
+
+    Connections:
+    - X lives in `news_monitoring`; set NEWS_MONGO_URI if it is on a different
+      cluster than Telegram. Falls back to MONGO_URI.
+    - Telegram uses MONGO_URI.
+
+    Sources:
+    - Telegram: MongoDB collection (realtime), filtered to the recent window.
+    - X: news_monitoring collections (one per topic), filtered to the window.
+    """
+    import os
+
+    defaults = _load_repo_telegram_defaults()
+    telegram_uri = mongo_uri or defaults.get("mongo_uri") or os.getenv("MONGO_URI")
+    x_uri = news_mongo_uri or os.getenv("NEWS_MONGO_URI") or telegram_uri
+    if not x_uri:
+        raise ValueError(
+            "A MongoDB URI is required. Set NEWS_MONGO_URI (for X) and/or MONGO_URI in .env."
+        )
+    resolved_news_db = news_db_name or os.getenv("NEWS_DB_NAME") or "news_monitoring"
+
+    since = datetime.utcnow() - timedelta(days=since_days)
+    collections = x_collections or DEFAULT_X_COLLECTIONS
+
+    target = _prepare_output_path(output_path, overwrite=overwrite)
+    frames: list[pd.DataFrame] = []
+    source_counts: dict[str, int] = {}
+
+    # --- X collections (one per topic) ---
+    for collection_name, topic_label in collections.items():
+        try:
+            raw = load_mongo_collection(x_uri, resolved_news_db, collection_name, since=since)
+        except Exception as exc:
+            source_counts[collection_name] = 0
+            print(f"  [warn] could not read {collection_name}: {exc}")
+            continue
+        normalised = normalise_x_frame(raw, topic_label=topic_label)
+        if not normalised.empty:
+            frames.append(normalised)
+        source_counts[collection_name] = int(len(normalised))
+
+    # --- Telegram (realtime) ---
+    tg_db = telegram_db_name or defaults.get("mongo_db_name") or "telegram_data"
+    tg_col = telegram_collection_name or defaults.get("mongo_collection_name") or "messages"
+    telegram_raw = pd.DataFrame()
+    try:
+        telegram_raw = load_mongo_collection(
+            telegram_uri, tg_db, tg_col, since=since, timestamp_fields=["timestamp", "date", "created_at"]
+        )
+    except Exception:
+        # Fall back to local JSONL if Mongo is unavailable.
+        telegram_raw = load_telegram_messages_from_jsonl(
+            telegram_local_data_dir or defaults.get("local_data_dir") or (REPO_ROOT / "data")
+        )
+    telegram_frame = normalise_telegram_frame(telegram_raw)
+    if not telegram_frame.empty:
+        # Keep only the recent window for Telegram too.
+        ts = pd.to_datetime(telegram_frame["timestamp"], errors="coerce")
+        telegram_frame = telegram_frame.loc[ts >= pd.Timestamp(since)].reset_index(drop=True)
+        if not telegram_frame.empty:
+            frames.append(telegram_frame)
+    source_counts["telegram"] = int(len(telegram_frame))
+
+    combined = pd.concat(frames, ignore_index=True) if frames else _empty_canonical_frame()
+    # Drop cross-source exact-id duplicates that may recur each run.
+    if not combined.empty:
+        combined = combined.drop_duplicates(subset=["tweet_id"]).reset_index(drop=True)
+    _write_canonical_frame(combined, target)
+
+    return {
+        "output_path": str(target),
+        "since": since.strftime("%Y-%m-%d %H:%M:%S"),
+        "since_days": since_days,
+        "total_rows": int(len(combined)),
+        "source_counts": source_counts,
+        "date_range": {
+            "min": combined["date"].min() if not combined.empty else None,
+            "max": combined["date"].max() if not combined.empty else None,
         },
     }

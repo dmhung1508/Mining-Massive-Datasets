@@ -17,6 +17,7 @@ const state = {
   index: 0,
   playing: false,
   audio: null,
+  muted: false,
 };
 
 const els = {
@@ -24,6 +25,8 @@ const els = {
   bg: document.getElementById("bg"),
   intro: document.getElementById("intro"),
   introTitle: document.getElementById("introTitle"),
+  prep: document.getElementById("prep"),
+  prepText: document.getElementById("prepText"),
   pip: document.getElementById("pip"),
   pipImg: document.getElementById("pipImg"),
   ltTopic: document.getElementById("ltTopic"),
@@ -33,8 +36,10 @@ const els = {
   clock: document.getElementById("clock"),
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
+  muteBtn: document.getElementById("muteBtn"),
   topN: document.getElementById("topN"),
   useLlm: document.getElementById("useLlm"),
+  genImages: document.getElementById("genImages"),
 };
 
 const TOPIC_LABEL = {
@@ -64,7 +69,13 @@ async function initLive2D() {
     autoStart: true,
     resizeTo: canvas.parentElement,
     backgroundAlpha: 0,
+    antialias: false,
+    powerPreference: "low-power",
+    resolution: Math.min(window.devicePixelRatio || 1, 1.5),
+    autoDensity: true,
   });
+  // Cap the frame rate so the avatar idle animation doesn't peg a weak GPU.
+  if (state.app.ticker) state.app.ticker.maxFPS = 30;
   setStatus("Đang tải người dẫn Ami...");
   try {
     state.model = await PIXI.live2d.Live2DModel.from(MODEL_URL);
@@ -135,14 +146,14 @@ function buildTicker() {
   }
 }
 
-async function fetchBroadcast() {
+async function prepareBroadcast() {
   const topN = parseInt(els.topN.value, 10) || 5;
   const useLlm = els.useLlm.checked;
-  setStatus("Đang lấy tin đã phân cụm...");
-  const res = await fetch(`${API_BASE}/broadcast?top_n=${topN}&use_llm=${useLlm}`);
+  const images = els.genImages.checked;
+  const res = await fetch(`${API_BASE}/prepare?top_n=${topN}&use_llm=${useLlm}&images=${images}`);
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
-    throw new Error(detail.detail || `broadcast failed (${res.status})`);
+    throw new Error(detail.detail || `prepare failed (${res.status})`);
   }
   return res.json();
 }
@@ -161,6 +172,7 @@ async function synthesize(text) {
 function speakWithLipSync(audioUrl) {
   return new Promise((resolve, reject) => {
     const audio = new Audio(audioUrl);
+    audio.muted = state.muted;
     state.audio = audio;
 
     let ctx, analyser, dataArray, source, raf;
@@ -204,14 +216,26 @@ function speakWithLipSync(audioUrl) {
 }
 
 async function playLoop() {
+  // Prefetch the first segment's audio.
+  let nextAudio = state.segments.length ? synthesize(state.segments[0].text).catch(() => null) : null;
+
   for (; state.index < state.segments.length; state.index++) {
     if (!state.playing) break;
     const seg = state.segments[state.index];
     updateLowerThird(seg);
     showImage(seg);
     setStatus(`Đang đọc (${state.index + 1}/${state.segments.length})`);
+
+    const url = await nextAudio;
+    // Start fetching the NEXT segment's audio while this one plays (no gap).
+    const upcoming = state.segments[state.index + 1];
+    nextAudio = upcoming ? synthesize(upcoming.text).catch(() => null) : null;
+
+    if (!url) {
+      setStatus(`Bỏ qua đoạn ${state.index + 1} (lỗi tạo tiếng).`);
+      continue;
+    }
     try {
-      const url = await synthesize(seg.text);
       await speakWithLipSync(url);
     } catch (err) {
       console.error(err);
@@ -225,32 +249,42 @@ async function playLoop() {
 async function start() {
   els.startBtn.classList.add("hidden");
   try {
-    // Fetch the broadcast in the background; capture errors so a fetch failure
-    // never blocks the intro animation.
-    const dataPromise = fetchBroadcast().catch((err) => ({ __error: err }));
+    // Kick off ALL heavy prep in the background: Grok writes the script + logs,
+    // images are generated. The globe spins meanwhile.
+    setStatus("Đang chuẩn bị bản tin...");
+    const dataPromise = prepareBroadcast().catch((err) => ({ __error: err }));
 
-    // Phase 1: spin the Earth for ~3 seconds.
-    setStatus("Quả địa cầu đang quay...");
+    // Phase 1: spin the Earth (visual cover while prep runs).
     try {
       await runEarthIntro({ container: els.intro, spins: 2, duration: 5000 });
     } catch (introErr) {
       console.error("Intro error:", introErr);
-      setStatus("Bỏ qua intro (WebGL lỗi): " + introErr.message);
     }
 
-    // Phase 2: show the title card for ~2 seconds.
+    // Phase 2: title card.
     els.introTitle.classList.add("show");
-    setStatus("Chuẩn bị bản tin...");
-    await sleep(2000);
+    await sleep(1500);
+    els.introTitle.classList.remove("show");
 
-    // Phase 3: hide the intro overlay and start the broadcast.
-    els.intro.classList.add("hidden");
-    await initLive2D();
+    // Phase 3: wait until prep (script + images + log) is fully done.
+    els.prep.classList.add("show");
+    els.prepText.textContent = "Đang viết kịch bản và tạo hình ảnh...";
     const data = await dataPromise;
+    els.prep.classList.remove("show");
     if (data && data.__error) throw data.__error;
+
     state.segments = (data && data.segments) || [];
     state.news = (data && data.news) || [];
-    if (!state.segments.length) { setStatus("Không có tin nào."); return; }
+    if (!state.segments.length) {
+      els.intro.classList.add("hidden");
+      setStatus("Không có tin nào.");
+      els.startBtn.classList.remove("hidden");
+      return;
+    }
+
+    // Phase 4: reveal the studio and start speaking.
+    els.intro.classList.add("hidden");
+    await initLive2D();
     buildTicker();
     state.index = 0;
     state.playing = true;
@@ -258,6 +292,7 @@ async function start() {
     playLoop();
   } catch (err) {
     console.error(err);
+    els.prep.classList.remove("show");
     setStatus(`Lỗi: ${err.message}`);
     els.startBtn.classList.remove("hidden");
   }
@@ -280,6 +315,11 @@ function stop() {
 
 els.startBtn.addEventListener("click", start);
 els.stopBtn.addEventListener("click", () => { stop(); setStatus("Đã dừng."); });
+els.muteBtn.addEventListener("click", () => {
+  state.muted = !state.muted;
+  if (state.audio) state.audio.muted = state.muted;
+  els.muteBtn.textContent = state.muted ? "🔇" : "🔊";
+});
 
 startClock();
 setStatus("Sẵn sàng. Nhấn Bắt đầu để mở bản tin.");

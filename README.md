@@ -66,6 +66,37 @@ Streamlit dashboard:
 streamlit run dashboard/streamlit_app.py
 ```
 
+## Latest clusters (realtime refresh)
+
+The full historical corpus is clustered offline into `jupyter/output/lsh_full`
+(11M+ posts, DuckDB-backed). For fresh "what's trending now" clusters, do **not**
+re-cluster everything. Instead pull a recent time window from every live source
+(Telegram realtime + the X collections `x_russia_ukraina_posts` /
+`x_us_iran_posts` in the `news_monitoring` MongoDB) and run the lightweight LSH
+pipeline on just that window:
+
+```bash
+python scripts/pipeline/refresh_latest_clusters.py --since-days 2 --scale-size 50000
+# -> writes clusters to jupyter/output/lsh_latest
+```
+
+Then serve the broadcast from the fresh window:
+
+```bash
+python scripts/api/serve_api.py --artifact-dir jupyter/output/lsh_latest
+```
+
+To serve from the **full historical corpus** instead (the big offline run):
+
+```bash
+python scripts/api/serve_api.py --artifact-dir jupyter/output/lsh_full
+```
+
+The broadcast reads columns selectively, so it works against the multi-GB
+`lsh_full` artifacts (top clusters returned in ~15s).
+
+Run the refresh on a schedule (cron / systemd timer) to keep clusters current.
+
 ## Generate news media (images / videos)
 
 After the pipeline produces clusters, turn the top narrative clusters into

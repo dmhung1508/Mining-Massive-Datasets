@@ -5,8 +5,10 @@ from social_lsh.news import (
     build_image_prompt,
     build_news_object,
     build_video_prompt,
+    build_broadcast_segments,
     clean_tweet_text,
     extract_hashtags,
+    pick_representative_text,
 )
 from social_lsh.veo import (
     GrokVideoConfig,
@@ -25,6 +27,40 @@ def test_clean_tweet_text_strips_urls_mentions_and_hashtag_symbols() -> None:
 def test_extract_hashtags_dedupes_case_insensitively() -> None:
     texts = ["#Russia #Ukraine", "#russia attack", "#Bakhmut"]
     assert extract_hashtags(texts) == ["Russia", "Ukraine", "Bakhmut"]
+
+
+def test_pick_representative_text_returns_central_post() -> None:
+    # The central post shares the most vocabulary with the others.
+    texts = [
+        "Russia launched missile strikes on Kyiv overnight causing damage",
+        "Missile strikes hit Kyiv overnight, Russia attack causes damage",
+        "Completely unrelated post about cooking pasta at home",
+    ]
+    rep = pick_representative_text(texts)
+    assert "kyiv" in rep.lower()
+    assert "pasta" not in rep.lower()
+
+
+def test_pick_representative_text_handles_empty() -> None:
+    assert pick_representative_text([]) == ""
+    assert pick_representative_text(["   ", "ab"]) == ""
+
+
+def test_broadcast_uses_llm_analysis_when_present() -> None:
+    items = [
+        {
+            "cluster_id": 5,
+            "cluster_size": 8,
+            "headline": "Giao tranh tại Bakhmut",
+            "summary": "Pháo kích quanh Bakhmut.",
+            "analysis": "Đây là diễn biến leo thang đáng chú ý tại miền đông Ukraine, cho thấy giao tranh chưa hạ nhiệt.",
+            "topic": "russia_ukraine_war",
+            "entities": ["Bakhmut"],
+        }
+    ]
+    segs = build_broadcast_segments(items)
+    story = next(s for s in segs if s["kind"] == "story")
+    assert "leo thang" in story["text"]  # the analysis is spoken
 
 
 def test_template_news_object_sets_war_scene() -> None:

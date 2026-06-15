@@ -14,6 +14,7 @@ media
 telegram_crawler/config.py
 telegram_crawler/cfg.py
 crawler.log
+log.txt
 session.session
 .vscode
 image/

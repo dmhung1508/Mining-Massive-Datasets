@@ -43,8 +43,16 @@ def test_broadcast_segments_have_intro_stories_and_outro() -> None:
 def test_broadcast_segment_text_mentions_topic_in_vietnamese() -> None:
     segments = build_broadcast_segments(_news())
     story = next(s for s in segments if s["kind"] == "story")
-    assert "Nga" in story["text"] or "Ukraine" in story["text"]
-    assert "Tin thứ 1" in story["text"]
+    # Story should carry the actual news content (the headline is Vietnamese).
+    assert "Bakhmut" in story["text"] or "Nga" in story["text"] or "Ukraine" in story["text"]
+
+
+def test_broadcast_segment_has_no_technical_stats() -> None:
+    # The anchor must not read cluster sizes / dedup counts aloud.
+    segments = build_broadcast_segments(_news())
+    for seg in segments:
+        assert "bài đăng gần" not in seg["text"]
+        assert "Hệ thống ghi nhận" not in seg["text"]
 
 
 def test_broadcast_script_is_multiline_transcript() -> None:
