@@ -146,14 +146,40 @@ function buildTicker() {
   }
 }
 
-async function prepareBroadcast() {
+function buildPrepParams() {
   const topN = parseInt(els.topN.value, 10) || 5;
   const useLlm = els.useLlm.checked;
   const images = els.genImages.checked;
-  const res = await fetch(`${API_BASE}/prepare?top_n=${topN}&use_llm=${useLlm}&images=${images}`);
+  return new URLSearchParams({ top_n: topN, use_llm: useLlm, images });
+}
+
+function preflightSummary(check) {
+  if (!check) return "Đang chuẩn bị bản tin...";
+  if (check.cache && check.cache.hit) return "Đã có metadata cache, bỏ qua bước viết kịch bản.";
+  if (check.status === "warning") return "Dữ liệu lớn hoặc cache trống; hệ thống sẽ chạy theo chế độ an toàn.";
+  return "Kiểm tra dữ liệu ổn, đang chuẩn bị bản tin.";
+}
+
+function preflightError(check) {
+  const warnings = (check && check.warnings) || [];
+  const plans = (check && check.recommendations) || [];
+  return [...warnings, ...plans].join(" ");
+}
+
+async function preflightBroadcast() {
+  const res = await fetch(`${API_BASE}/preflight?${buildPrepParams().toString()}`);
+  if (!res.ok) throw new Error(`preflight failed (${res.status})`);
+  return res.json();
+}
+
+async function prepareBroadcast() {
+  const res = await fetch(`${API_BASE}/prepare?${buildPrepParams().toString()}`);
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
-    throw new Error(detail.detail || `prepare failed (${res.status})`);
+    const message = typeof detail.detail === "object"
+      ? (detail.detail.message || preflightError(detail.detail.preflight))
+      : detail.detail;
+    throw new Error(message || `prepare failed (${res.status})`);
   }
   return res.json();
 }
@@ -249,9 +275,15 @@ async function playLoop() {
 async function start() {
   els.startBtn.classList.add("hidden");
   try {
-    // Kick off ALL heavy prep in the background: Grok writes the script + logs,
-    // images are generated. The globe spins meanwhile.
-    setStatus("Đang chuẩn bị bản tin...");
+    setStatus("Đang kiểm tra dữ liệu, cache và bộ nhớ...");
+    const check = await preflightBroadcast();
+    if (check.status === "danger") {
+      throw new Error(preflightError(check) || "Preflight báo không an toàn để chạy.");
+    }
+    setStatus(preflightSummary(check));
+
+    // Kick off prep in the background. If metadata exists, this loads from disk;
+    // otherwise it writes the script/images once and records them in metadata.
     const dataPromise = prepareBroadcast().catch((err) => ({ __error: err }));
 
     // Phase 1: spin the Earth (visual cover while prep runs).
@@ -268,7 +300,9 @@ async function start() {
 
     // Phase 3: wait until prep (script + images + log) is fully done.
     els.prep.classList.add("show");
-    els.prepText.textContent = "Đang viết kịch bản và tạo hình ảnh...";
+    els.prepText.textContent = check.cache && check.cache.hit
+      ? "Đang tải kịch bản và hình ảnh đã lưu..."
+      : "Đang tạo metadata kịch bản và hình ảnh lần đầu...";
     const data = await dataPromise;
     els.prep.classList.remove("show");
     if (data && data.__error) throw data.__error;

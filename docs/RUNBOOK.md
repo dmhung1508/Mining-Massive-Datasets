@@ -18,6 +18,10 @@ bản tin vào gần như tức thì (không phải chờ gen ảnh ~40s mỗi t
 > Nếu lười chờ ảnh, bỏ qua B1 và chỉ chạy B2 — bản tin vẫn nói (Grok ~3s), chỉ là
 > không có ảnh minh họa. Hoặc B1 thêm `--no-images` để chỉ dựng kịch bản.
 
+Kịch bản + trạng thái ảnh được lưu ở `jupyter/output/news/metadata/`; ảnh được
+lưu theo cache id trong `jupyter/output/news/images/<cache-id>/`. Nếu artifact
+parquet đổi, cache tự hết hiệu lực và lần chạy kế tiếp sẽ dựng lại metadata.
+
 ---
 
 ## 0. Cài đặt (chỉ khi dựng máy mới / mất package)
@@ -62,6 +66,12 @@ Nhấn **Bắt đầu** → quả địa cầu quay 3s → vào bản tin.
 > Lỗi "Run the LSH pipeline first" nghĩa là artifact dir đang trỏ tới thư mục
 > chưa có `clusters.parquet`. Đổi `--artifact-dir` sang `lsh_combined` hoặc
 > `lsh_full` là hết.
+
+Khi bật server hoặc bấm **Bắt đầu**, hệ thống sẽ preflight trước: kiểm tra số
+dòng parquet, dung lượng `scale_shingles`, RAM/disk còn trống và cache metadata.
+Nếu báo `danger` thì nên dừng, đổi sang `lsh_combined`, hoặc đóng app nặng trước.
+Với `lsh_full`, lần đầu cache miss có thể lâu vì phải quét parquet lớn; các lần
+sau sẽ đọc metadata đã lưu và không gọi lại Grok/ảnh.
 
 ---
 

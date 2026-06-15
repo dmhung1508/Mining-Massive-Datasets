@@ -97,6 +97,21 @@ The broadcast reads columns selectively, so it works against the multi-GB
 
 Run the refresh on a schedule (cron / systemd timer) to keep clusters current.
 
+Before the API prepares a broadcast it runs a local preflight check (artifact
+size, parquet rows, available RAM/disk, and cache status). Large artifacts such
+as `lsh_full` are read in streaming mode for broadcast prep, but the first cache
+miss can still take time because it scans the parquet row groups. Use
+`lsh_combined` for a quick demo, or pre-generate once while the machine is idle:
+
+```bash
+python scripts/media/pregen_broadcast.py --artifact-dir jupyter/output/lsh_combined --top-n 5
+```
+
+Broadcast scripts and image references are persisted in
+`jupyter/output/news/metadata/`; generated images are stored under
+`jupyter/output/news/images/<cache-id>/`. If the source parquet artifacts change,
+the metadata cache is automatically invalidated and rebuilt.
+
 ## Generate news media (images / videos)
 
 After the pipeline produces clusters, turn the top narrative clusters into

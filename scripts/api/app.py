@@ -11,8 +11,8 @@ Endpoints:
 """
 from __future__ import annotations
 
-import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +25,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from social_lsh.artifacts import artifact_path, ensure_artifact_dir, read_dataframe, read_metrics
+from social_lsh.broadcast_cache import (
+    broadcast_cache_id,
+    image_file,
+    legacy_image_file,
+    load_metadata,
+    public_image_path,
+    save_metadata,
+    source_signature,
+)
 from social_lsh.constants import DEFAULT_ARTIFACT_DIR, DEFAULT_SEED, REPO_ROOT
 from social_lsh.news import build_broadcast_segments, build_news_object, build_image_prompt
-from social_lsh.preprocessing import deserialize_nested_columns
+from social_lsh.runtime_check import build_run_preflight
 from social_lsh.search import prepare_search_index, search_similar_tweets
 from social_lsh.tts import TTSClient, TTSError
 from social_lsh.images import ImageError, OpenAIImageClient
@@ -176,44 +185,22 @@ def _load_scale_for_news(needed_ids: set[int] | None = None) -> pd.DataFrame:
 _TOP_CLUSTERS_CACHE: dict[str, Any] = {}
 _BROADCAST_CACHE: dict[tuple, list[dict[str, Any]]] = {}
 
-# Persisted scripts so we never re-generate after a restart.
-SCRIPTS_DIR = REPO_ROOT / "jupyter" / "output" / "news" / "scripts"
 
-
-def _script_meta_path(top_n: int, samples_per_cluster: int, use_llm: bool) -> Path:
-    tag = f"{ARTIFACT_DIR.name}_top{top_n}_s{samples_per_cluster}_{'llm' if use_llm else 'tmpl'}"
-    return SCRIPTS_DIR / f"{tag}.json"
-
-
-def _load_persisted_script(top_n: int, samples_per_cluster: int, use_llm: bool):
-    path = _script_meta_path(top_n, samples_per_cluster, use_llm)
-    if not path.exists():
-        return None
-    try:
-        items = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    # Re-attach image paths in case images were generated after the script.
-    for item in items:
-        cid = item.get("cluster_id")
-        if (IMAGES_DIR / f"cluster_{cid}.png").exists():
-            item["image_path"] = f"/news-image/{cid}"
-    return items
-
-
-def _save_persisted_script(top_n: int, samples_per_cluster: int, use_llm: bool, items: list[dict[str, Any]]) -> None:
-    try:
-        SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-        _script_meta_path(top_n, samples_per_cluster, use_llm).write_text(
-            json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except OSError:
-        pass
+def _source_cache_token() -> tuple[tuple[Any, Any], tuple[Any, Any]]:
+    sig = source_signature(ARTIFACT_DIR)
+    clusters = sig.get("clusters") or {}
+    scale = sig.get("scale_shingles") or {}
+    return (
+        (clusters.get("size_bytes"), clusters.get("mtime_ns")),
+        (scale.get("size_bytes"), scale.get("mtime_ns")),
+    )
 
 
 def _top_clusters_frame(top_n: int):
     """Read and rank the top clusters once, then cache (clusters.parquet is large)."""
-    key = "ranked"
+    token = _source_cache_token()
+    key = ("ranked", token)
+    members_key = ("members", token)
     cached = _TOP_CLUSTERS_CACHE.get(key)
     if cached is None:
         clusters = read_dataframe(artifact_path("clusters", ARTIFACT_DIR))
@@ -224,25 +211,27 @@ def _top_clusters_frame(top_n: int):
             .reset_index(drop=True)
         )
         _TOP_CLUSTERS_CACHE[key] = cached
-        _TOP_CLUSTERS_CACHE["members"] = clusters[["tweet_id", "cluster_id"]]
-    return cached.head(top_n), _TOP_CLUSTERS_CACHE["members"]
+        _TOP_CLUSTERS_CACHE[members_key] = clusters[["tweet_id", "cluster_id"]]
+    return cached.head(top_n), _TOP_CLUSTERS_CACHE[members_key]
 
 
 def _build_news_items(top_n: int, samples_per_cluster: int, use_llm: bool, force: bool = False) -> list[dict[str, Any]]:
     """Build news objects from the top clusters, attaching cached images if present.
 
-    Reuse order: in-memory cache -> persisted script file -> generate fresh.
+    Reuse order: in-memory cache -> metadata manifest -> generate fresh.
     Set `force=True` to regenerate and overwrite the saved script.
     """
-    cache_key = (top_n, samples_per_cluster, use_llm)
+    cache_id = broadcast_cache_id(ARTIFACT_DIR, top_n, samples_per_cluster, use_llm)
+    cache_key = (cache_id, top_n, samples_per_cluster, use_llm, _source_cache_token())
     if not force and cache_key in _BROADCAST_CACHE:
         return _BROADCAST_CACHE[cache_key]
 
     if not force:
-        persisted = _load_persisted_script(top_n, samples_per_cluster, use_llm)
-        if persisted:
-            _BROADCAST_CACHE[cache_key] = persisted
-            return persisted
+        meta = load_metadata(ARTIFACT_DIR, top_n, samples_per_cluster, use_llm)
+        if meta:
+            items = meta.get("items") or []
+            _BROADCAST_CACHE[cache_key] = items
+            return items
 
     ranked, all_members = _top_clusters_frame(top_n)
     top_cluster_ids = set(ranked["cluster_id"].tolist())
@@ -292,8 +281,10 @@ def _build_news_items(top_n: int, samples_per_cluster: int, use_llm: bool, force
     else:
         items = [_make(args) for args in cluster_inputs]
 
+    segments = build_broadcast_segments(items)
+    meta = save_metadata(ARTIFACT_DIR, top_n, samples_per_cluster, use_llm, items, segments)
+    items = meta["items"]
     _BROADCAST_CACHE[cache_key] = items
-    _save_persisted_script(top_n, samples_per_cluster, use_llm, items)
     return items
 
 
@@ -315,25 +306,34 @@ def broadcast(
     return {"news": items, "segments": segments}
 
 
-def _generate_one_image(client, item: dict[str, Any]) -> bool:
+def _generate_one_image(client, item: dict[str, Any], cache_id: str) -> bool:
     """Generate one cluster image with OpenAI. Returns True if a new image was created."""
     cluster_id = item.get("cluster_id")
-    image_file = IMAGES_DIR / f"cluster_{cluster_id}.png"
-    if image_file.exists():
-        item["image_path"] = f"/news-image/{cluster_id}"
+    target = image_file(cache_id, cluster_id)
+    if target.exists():
+        item["image_path"] = public_image_path(cache_id, cluster_id)
         return False
+
+    legacy = legacy_image_file(cluster_id)
+    if legacy.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy, target)
+        item["image_path"] = public_image_path(cache_id, cluster_id)
+        return False
+
     prompt = item.get("image_prompt") or item.get("scene")
     if not prompt:
         return False
     try:
-        client.generate_to_file(prompt, image_file, size="1024x1024")
-        item["image_path"] = f"/news-image/{cluster_id}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        client.generate_to_file(prompt, target, size="1024x1024")
+        item["image_path"] = public_image_path(cache_id, cluster_id)
         return True
     except (ImageError, ValueError):
         return False
 
 
-def _generate_images_for(items: list[dict[str, Any]], quality: str = "low") -> int:
+def _generate_images_for(items: list[dict[str, Any]], cache_id: str, quality: str = "low") -> int:
     """Generate any missing cluster illustrations in parallel (OpenAI Images API)."""
     try:
         client = OpenAIImageClient.from_env()
@@ -345,8 +345,19 @@ def _generate_images_for(items: list[dict[str, Any]], quality: str = "low") -> i
     from concurrent.futures import ThreadPoolExecutor
 
     with ThreadPoolExecutor(max_workers=min(6, max(1, len(items)))) as pool:
-        results = list(pool.map(lambda it: _generate_one_image(client, it), items))
+        results = list(pool.map(lambda it: _generate_one_image(client, it, cache_id), items))
     return sum(1 for r in results if r)
+
+
+@app.get("/preflight")
+def preflight(
+    top_n: int = Query(5, ge=1, le=20),
+    samples_per_cluster: int = Query(12, ge=1, le=40),
+    use_llm: bool = Query(True),
+    images: bool = Query(False),
+) -> dict[str, Any]:
+    """Check local data/cache/resources before preparing a broadcast."""
+    return build_run_preflight(ARTIFACT_DIR, top_n, samples_per_cluster, use_llm, images)
 
 
 @app.get("/prepare")
@@ -356,13 +367,25 @@ def prepare(
     use_llm: bool = Query(True, description="Use Grok to write the script (needs API_KEY)."),
     images: bool = Query(False, description="Generate missing images now (slow). Prefer pre-generating offline."),
     force: bool = Query(False, description="Regenerate the script even if a saved one exists."),
+    allow_unsafe: bool = Query(False, description="Continue even if preflight says danger."),
 ) -> dict[str, Any]:
     """Do the heavy work BEFORE the anchor speaks.
 
-    Builds the news script (Grok, logged to log.txt), saves it to
-    jupyter/output/news/scripts/ so later runs reuse it, and attaches any
+    Builds the news script (Grok, logged to log.txt), saves a metadata manifest
+    under jupyter/output/news/metadata/ so later runs reuse it, and attaches any
     pre-generated images. By default it does NOT generate images on the fly.
     """
+    check = build_run_preflight(ARTIFACT_DIR, top_n, samples_per_cluster, use_llm, images)
+    if check["status"] == "danger" and not allow_unsafe:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Preflight check failed. Fix the data/resource issue or retry with allow_unsafe=true.",
+                "preflight": check,
+            },
+        )
+
+    cache_id = broadcast_cache_id(ARTIFACT_DIR, top_n, samples_per_cluster, use_llm)
     try:
         items = _build_news_items(top_n, samples_per_cluster, use_llm, force=force)
     except FileNotFoundError as exc:
@@ -373,23 +396,38 @@ def prepare(
 
     images_created = 0
     if images:
-        images_created = _generate_images_for(items)
+        images_created = _generate_images_for(items, cache_id)
 
     segments = build_broadcast_segments(items)
+    meta = save_metadata(ARTIFACT_DIR, top_n, samples_per_cluster, use_llm, items, segments)
+    items = meta["items"]
+    segments = meta["segments"]
     return {
         "news": items,
         "segments": segments,
         "images_created": images_created,
         "used_llm": use_llm,
+        "cache_hit": check["cache"]["hit"] and not force,
+        "cache_id": cache_id,
+        "metadata_path": check["cache"]["metadata_path"],
+        "preflight": check,
     }
+
+
+@app.get("/news-image/{cache_id}/{cluster_id}")
+def cached_news_image(cache_id: str, cluster_id: int) -> FileResponse:
+    cached = image_file(cache_id, cluster_id)
+    if not cached.exists():
+        raise HTTPException(status_code=404, detail="image not generated for this cache")
+    return FileResponse(str(cached), media_type="image/png")
 
 
 @app.get("/news-image/{cluster_id}")
 def news_image(cluster_id: int) -> FileResponse:
-    image_file = IMAGES_DIR / f"cluster_{cluster_id}.png"
-    if not image_file.exists():
+    cached = legacy_image_file(cluster_id)
+    if not cached.exists():
         raise HTTPException(status_code=404, detail="image not generated for this cluster")
-    return FileResponse(str(image_file), media_type="image/png")
+    return FileResponse(str(cached), media_type="image/png")
 
 
 # --- Static mounts: Live2D avatar assets + the anchor web UI ---------------
