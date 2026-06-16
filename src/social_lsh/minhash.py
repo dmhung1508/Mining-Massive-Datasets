@@ -15,11 +15,13 @@ MINHASH_PRIME = np.int64(2_147_483_647)
 
 
 def stable_hash64(text: str) -> int:
+    # Hash co dinh, de chay lai lan sau van ra cung gia tri.
     digest = hashlib.blake2b(text.encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, byteorder="big", signed=False)
 
 
 def hashed_shingles(shingles: list[str]) -> list[int]:
+    # Shingle text -> so; set() de tranh 1 cum lap lai lam lech Jaccard.
     return sorted({stable_hash64(shingle) % int(MINHASH_PRIME) for shingle in shingles})
 
 
@@ -43,6 +45,7 @@ def signature_matrix(
         if not hashes:
             continue
         values = np.asarray(hashes, dtype=np.int64)
+        # Moi perm lay min hash -> 1 o trong signature vector.
         transformed = ((a[:, None] * values[None, :]) + b[:, None]) % MINHASH_PRIME
         signatures[idx] = transformed.min(axis=1)
 
@@ -72,6 +75,7 @@ def generate_candidate_pairs(
         buckets: dict[tuple[int, bytes], list[int]] = defaultdict(list)
 
         for doc_idx in range(signatures.shape[0]):
+            # Trung 1 band => dua vao cung bucket, lat nua moi verify that.
             key = (band_index, signatures[doc_idx, start:end].tobytes())
             buckets[key].append(doc_idx)
 

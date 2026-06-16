@@ -330,6 +330,7 @@ def normalise_x_frame(frame: pd.DataFrame, topic_label: str | None = None) -> pd
     records = frame.to_dict(orient="records")
     rows: list[dict[str, Any]] = []
     for row in records:
+        # X crawler da loc san bang LLM, bai bi reject thi bo qua luon.
         if row.get("shouldKeep") is False:
             continue
 
@@ -351,6 +352,7 @@ def normalise_x_frame(frame: pd.DataFrame, topic_label: str | None = None) -> pd
         has_media = bool(row.get("hasMedia")) or bool(row.get("media"))
         llm_payload = row.get("llm")
 
+        # Dua post X ve schema chung de phia sau khong can biet source nao.
         rows.append(
             {
                 "tweet_id": _stable_positive_int64(f"x:{source_item_id}"),

@@ -11,6 +11,7 @@ class UnionFind:
     def find(self, value: int) -> int:
         parent = self.parent[value]
         if parent != value:
+            # Nen duong di cho lan find sau nhanh hon.
             self.parent[value] = self.find(parent)
         return self.parent[value]
 
@@ -31,6 +32,7 @@ def connected_components(tweet_ids: list[int], verified_pairs: pd.DataFrame) -> 
     union_find = UnionFind(tweet_ids)
 
     for row in verified_pairs[["tweet_id_left", "tweet_id_right"]].itertuples(index=False):
+        # Moi verified pair la 1 canh noi 2 bai gan trung.
         union_find.union(int(row.tweet_id_left), int(row.tweet_id_right))
 
     roots = {tweet_id: union_find.find(tweet_id) for tweet_id in tweet_ids}

@@ -8,7 +8,6 @@ import streamlit as st
 
 from social_lsh.artifacts import artifact_path, read_dataframe
 from social_lsh.constants import DEFAULT_ARTIFACT_DIR
-from social_lsh.search import search_similar_tweets
 
 
 def full_search_database(artifact_dir: str) -> Path:
@@ -171,7 +170,31 @@ def render_metrics(metrics: dict) -> None:
     cols[3].metric("LSH runtime", f"{float(scale.get('runtime_seconds', 0.0)):.3f}s")
 
 
-def render_source_mix(artifact_dir: str) -> None:
+def metric_source_counts(metrics: dict) -> pd.DataFrame:
+    source_counts = (
+        metrics.get("incremental_update", {}).get("source_counts")
+        or metrics.get("source_counts")
+        or {}
+    )
+    if not source_counts:
+        return pd.DataFrame()
+    frame = pd.DataFrame(
+        [{"source": source, "reported_rows": int(rows)} for source, rows in source_counts.items()]
+    )
+    return frame.sort_values("source").reset_index(drop=True)
+
+
+def render_source_mix(artifact_dir: str, metrics: dict) -> None:
+    reported_counts = metric_source_counts(metrics)
+    if not reported_counts.empty:
+        st.subheader("Reported source totals")
+        st.caption(
+            "These totals come from metrics.json and are used for the presentation summary. "
+            "Trending still reads the current DuckDB index."
+        )
+        st.dataframe(reported_counts, width="stretch", hide_index=True)
+        return
+
     if full_search_database(artifact_dir).exists():
         source_counts = query_full_search(
             artifact_dir,
@@ -263,7 +286,8 @@ def render_trending(artifact_dir: str) -> None:
         st.info("No clusters match the selected filters.")
         return
 
-    display = trends.copy()
+    visible_columns = ["cluster_id", "first_seen", "sample_source", "topic_label", "sample_text"]
+    display = trends[visible_columns].copy()
     display["sample_text"] = display["sample_text"].map(lambda value: compact_text(value, 220))
     st.dataframe(display, width="stretch", hide_index=True)
 
@@ -302,66 +326,6 @@ def render_trending(artifact_dir: str) -> None:
         st.dataframe(source_mix, width="stretch", hide_index=True)
 
 
-def render_search(artifact_dir: str) -> None:
-    st.subheader("Similar post search")
-    query = st.text_area(
-        "Query text",
-        value="What is happening in Kaliningrad today is genocide by the Russian regime.",
-        height=90,
-    )
-    cols = st.columns([1, 1, 2])
-    top_k = cols[0].number_input("Top K", min_value=1, max_value=20, value=5, step=1)
-    min_jaccard = cols[1].number_input(
-        "Min Jaccard",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.0,
-        step=0.05,
-        help="Use 0.0 for exploratory search. Use 0.8 to show only verified near-duplicate style matches.",
-    )
-    run = cols[2].button("Search", type="primary", width="stretch")
-
-    if not run:
-        return
-
-    with st.spinner("Searching similar posts..."):
-        results, metadata = search_similar_tweets(
-            query_text=query,
-            artifact_dir=Path(artifact_dir),
-            top_k=int(top_k),
-            min_jaccard=float(min_jaccard),
-        )
-
-    st.json(metadata)
-    if metadata.get("retrieval_mode") == "bruteforce_fallback":
-        st.warning(
-            "LSH did not find a bucket match for this query, so the app scanned the demo sample "
-            "and returned the closest rows above the Jaccard threshold."
-        )
-    if results.empty:
-        st.info("No similar posts found.")
-        return
-
-    printable = results.copy()
-    max_jaccard = float(printable["jaccard"].max()) if "jaccard" in printable.columns and not printable.empty else 0.0
-    if max_jaccard < 0.1:
-        st.info(
-            "Returned rows are weak fallback matches. For a clean duplicate demo, use a query copied "
-            "from an existing cluster or set Min Jaccard around 0.8."
-        )
-    printable["text"] = printable["text"].map(lambda value: compact_text(value, limit=260))
-    printable = printable.rename(
-        columns={
-            "tweet_id": "internal_id",
-            "user_id": "internal_user_id",
-            "source_item_id": "source_post_id",
-            "source_user_id": "source_author_or_channel",
-            "source_channel_id": "telegram_channel_id",
-        }
-    )
-    st.dataframe(printable, width="stretch", hide_index=True)
-
-
 def main() -> None:
     st.set_page_config(page_title="LSH Narrative Cluster Dashboard", layout="wide")
     st.title("LSH Narrative Cluster Dashboard")
@@ -384,13 +348,13 @@ def main() -> None:
 
     st.sidebar.caption(f"Input: {metrics.get('extract_subsets', {}).get('input_path', 'unknown')}")
 
-    tab_overview, tab_trending, tab_clusters, tab_search, tab_raw = st.tabs(
-        ["Overview", "Trending", "Clusters", "Search", "Raw metrics"]
+    tab_overview, tab_trending, tab_clusters, tab_raw = st.tabs(
+        ["Overview", "Trending", "Clusters", "Raw metrics"]
     )
 
     with tab_overview:
         render_metrics(metrics)
-        render_source_mix(artifact_dir)
+        render_source_mix(artifact_dir, metrics)
         render_config_table(metrics)
 
     with tab_clusters:
@@ -398,9 +362,6 @@ def main() -> None:
 
     with tab_trending:
         render_trending(artifact_dir)
-
-    with tab_search:
-        render_search(artifact_dir)
 
     with tab_raw:
         st.json(metrics)

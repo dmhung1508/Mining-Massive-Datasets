@@ -26,10 +26,12 @@ from .similarity import exact_jaccard_pairs, verify_candidate_pairs
 
 
 def _required_columns() -> list[str]:
+    # Cot toi thieu de coi 1 dong la 1 document hop le.
     return ["tweet_id", "user_id", "text", "timestamp", "date"]
 
 
 def _metadata_columns() -> list[str]:
+    # Cot phu de lat nua biet bai den tu Twitter/Telegram/X va topic nao.
     return [
         "source",
         "source_item_id",
@@ -46,6 +48,7 @@ def _metadata_columns() -> list[str]:
 
 def _available_columns(column_names: list[str]) -> list[str]:
     available = set(column_names)
+    # Metadata source nao co thi lay, khong ep dataset nao cung phai giong nhau 100%.
     return _required_columns() + [
         column for column in _metadata_columns() if column in available
     ]
@@ -65,6 +68,7 @@ def _load_with_spark(input_path: Path, sample_size: int, seed: int) -> pd.DataFr
     try:
         source_frame = spark.read.parquet(str(input_path))
         columns = _available_columns(source_frame.columns)
+        # Loc cac dong thieu id/text ngay tu dau cho cac buoc sau nhe hon.
         frame = (
             source_frame.select(*columns)
             .filter(F.col("tweet_id").isNotNull())
@@ -98,6 +102,7 @@ def _stream_sample_with_pyarrow(
         batch_frame = batch_frame.dropna(subset=["tweet_id", "user_id", "text"])
         for row in batch_frame.itertuples(index=False):
             tweet_id = int(row.tweet_id)
+            # Sample theo hash id de lan nao chay lai cung ra dung tap nay.
             score = _sampling_score(tweet_id, seed)
             payload = tuple(getattr(row, column) for column in columns)
             entry = (-score, -tweet_id, payload)
@@ -116,8 +121,10 @@ def _stream_sample_with_pyarrow(
 
 def _load_subset(input_path: Path, sample_size: int, seed: int) -> tuple[pd.DataFrame, str]:
     try:
+        # Co Spark thi dung Spark, doc parquet lon nhanh hon.
         return _load_with_spark(input_path, sample_size, seed), "spark"
     except Exception:
+        # May local loi Spark thi fallback PyArrow, cham hon nhung de chay.
         return _stream_sample_with_pyarrow(input_path, sample_size, seed), "pyarrow"
 
 
@@ -131,6 +138,7 @@ def extract_subsets(
     artifact_root = ensure_artifact_dir(artifact_dir)
     source = Path(input_path or DEFAULT_INPUT_PARQUET)
 
+    # 1 tap nho de bf Jaccard, 1 tap lon hon de test LSH cho do qua tai.
     baseline_df, baseline_backend = _load_subset(source, baseline_size, seed)
     scale_df, scale_backend = _load_subset(source, scale_size, seed + 1)
 
@@ -170,6 +178,7 @@ def build_shingles_artifacts(
     for input_name, output_name in subset_specs.items():
         input_path = artifact_path(input_name, artifact_root)
         subset = read_dataframe(input_path)
+        # Chuan hoa text roi cat thanh 3-word shingles; text ngan qua thi bo.
         processed = build_shingles(subset, shingle_size=shingle_size)
         output_path = artifact_path(output_name, artifact_root)
         serialised = serialize_nested_columns(processed, ["tokens", "shingles"])
@@ -197,6 +206,7 @@ def run_baseline(
     artifact_root = ensure_artifact_dir(artifact_dir)
     baseline_path = artifact_path("baseline_shingles", artifact_root)
     baseline_df = _load_shingled_dataframe(baseline_path)
+    # Baseline nho lam ground truth, de lat nua cham cfg LSH.
     pairs_df, metrics = exact_jaccard_pairs(baseline_df, threshold=threshold)
     output_path = artifact_path("baseline_pairs", artifact_root)
     write_dataframe(pairs_df, output_path)
@@ -217,6 +227,7 @@ def run_lsh(
 
     config_results: list[dict[str, float | int | str]] = []
     for config in configs:
+        # Thu cfg tren baseline truoc, cfg nao kem thi khong dem sang scale.
         baseline_candidates, run_metrics = run_config(baseline_df, config=config, seed=seed)
         eval_metrics = evaluate_candidates(baseline_candidates, ground_truth)
         config_results.append(
@@ -232,6 +243,7 @@ def run_lsh(
     winner_name = ranked[0]["config_name"]
     winner = next(config for config in configs if config.name == winner_name)
 
+    # Lay cfg thang roi moi chay scale set de sinh candidate pairs.
     started_at = time.perf_counter()
     scale_candidates, scale_metrics = run_config(scale_df, config=winner, seed=seed)
     runtime_seconds = round(time.perf_counter() - started_at, 6)
@@ -261,10 +273,12 @@ def verify_and_cluster(
     scale_df = _load_shingled_dataframe(artifact_path("scale_shingles", artifact_root))
     candidates = read_dataframe(artifact_path("candidates", artifact_root))
 
+    # Cache id -> shingles, khong phai scan dataframe moi lan verify.
     shingles_lookup = {
         int(row.tweet_id): set(row.shingles)
         for row in scale_df[["tweet_id", "shingles"]].itertuples(index=False)
     }
+    # LSH chi la loc ung vien, den day moi tinh Jaccard that.
     verified_pairs, verify_metrics = verify_candidate_pairs(
         shingles_lookup,
         candidates,
@@ -273,6 +287,7 @@ def verify_and_cluster(
     verified_path = artifact_path("verified_pairs", artifact_root)
     write_dataframe(verified_pairs, verified_path)
 
+    # Verified pair = edge; component nao lien thong thi xem la 1 narrative cluster.
     clusters = connected_components(scale_df["tweet_id"].astype(int).tolist(), verified_pairs)
     clusters_path = artifact_path("clusters", artifact_root)
     write_dataframe(clusters, clusters_path)
